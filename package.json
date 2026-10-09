@@ -1,0 +1,60 @@
+{
+  "name": "signalk-calc-paths",
+  "version": "0.1.0",
+  "description": "Signal K plugin to calculate new paths from existing ones: a formula over live values, a daily, weekly, monthly or yearly counter on a running total, and a sum that integrates a rate over time.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --check index.js && node --test",
+    "test:integration": "node integration/server-check.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Peter-Petrik/signalk-calc-paths.git"
+  },
+  "keywords": [
+    "signalk-node-server-plugin",
+    "signalk-webapp",
+    "signalk-category-utility",
+    "calculate",
+    "formula",
+    "counter",
+    "integrate",
+    "derived"
+  ],
+  "author": {
+    "name": "Peter Petrik",
+    "url": "https://peterpetrik.com"
+  },
+  "license": "GPL-3.0-or-later",
+  "bugs": {
+    "url": "https://github.com/Peter-Petrik/signalk-calc-paths/issues"
+  },
+  "homepage": "https://github.com/Peter-Petrik/signalk-calc-paths#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "signalk": {
+    "pluginId": "signalk-calc-paths",
+    "displayName": "Calculated Paths",
+    "appIcon": "./icon.svg",
+    "screenshots": [
+      "./screenshots/webapp-status.png",
+      "./screenshots/configuration-counter.png",
+      "./screenshots/configuration-formula.png"
+    ]
+  },
+  "dependencies": {
+    "expr-eval-fork": "^3.0.3"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "public/",
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "LICENSE",
+    "icon.svg",
+    "screenshots/*.png"
+  ]
+}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calculated Paths</title>
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-text">
+      <h1>Calculated Paths</h1>
+      <p id="context" class="context"></p>
+    </div>
+    <a class="settings-link" href="/admin/#/serverConfiguration/plugins/signalk-calc-paths">Edit entries</a>
+  </header>
+
+  <main>
+    <div id="notices" aria-live="polite"></div>
+    <ol id="entries" class="entries" aria-label="Calculated paths"></ol>
+    <p id="placeholder" class="placeholder">Loading the calculated paths.</p>
+  </main>
+
+  <footer>
+    <span id="refreshed"></span>
+    <span id="version"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

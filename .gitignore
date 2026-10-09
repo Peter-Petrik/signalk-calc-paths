@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Local Signal K configuration and saved state
+plugin-config-data/
+state.json
+state.json.*
+
+# Packed tarballs
+*.tgz
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDEs and editors
+.vscode/
+.idea/

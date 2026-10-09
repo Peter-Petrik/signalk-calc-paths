@@ -1,0 +1,106 @@
+# Automated npm publish and GitHub Release triggered by version tags.
+# When a tag matching v* (e.g., v1.2.0) is pushed to GitHub,
+# this workflow:
+#   1. Runs the test suite
+#   2. Extracts the matching version entry from CHANGELOG.md
+#   3. Creates a GitHub Release with those notes
+#   4. Publishes the package to the npm registry
+#
+# Authentication:
+#   - npm: Trusted Publishing (OIDC) — no stored secrets or tokens required.
+#     The trust relationship is configured on the npm package settings page.
+#   - GitHub Release: Uses the default GITHUB_TOKEN provided by Actions.
+#
+# Trusted Publishing configuration (npmjs.com):
+#   - Repository owner: Peter-Petrik
+#   - Repository name: signalk-calc-paths
+#   - Workflow filename: publish.yml
+#   - Environment: (none)
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    # Required permissions:
+    #   id-token: write — npm Trusted Publishing (OIDC token exchange)
+    #   contents: write — creating GitHub Releases
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # npm's documentation states that Trusted Publishing requires
+      # Node 22.14.0 or later and npm 11.5.1 or later.
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Upgrading npm removes the dependence on whichever npm version the
+      # runner's Node.js happens to bundle. An npm too old for the OIDC
+      # handshake fails with a misleading "Access token expired" / 404 error.
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A tag must never publish a package whose tests fail.
+      - name: Run tests
+        run: npm test
+
+      # The tag and package.json must agree, otherwise the release notes
+      # and the published version would describe different things.
+      - name: Check tag matches package version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+
+      # Extract the release notes for this version from CHANGELOG.md.
+      # Matches everything between the ## [X.Y.Z] header for the tagged
+      # version and the next ## [ header (or end of file).
+      - name: Extract release notes from CHANGELOG
+        id: changelog
+        run: |
+          # Strip the leading 'v' from the tag to match CHANGELOG format
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Extract the section between this version's header and the next
+          NOTES=$(awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "\\[" ver "\\]") found=1
+              next
+            }
+            found { print }
+          ' CHANGELOG.md)
+
+          # Strip any CHANGELOG comparison links (e.g., [1.0.0]: https://...)
+          NOTES=$(echo "$NOTES" | sed '/^\[.*\]: https:\/\//d')
+
+          # Write to a file to preserve multiline content
+          echo "$NOTES" > release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          name: ${{ github.ref_name }}
+
+      - name: Publish to npm with provenance
+        run: npm publish --provenance --access public

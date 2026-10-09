@@ -1,0 +1,23 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-10-09
+
+### Added
+- **Formulas**: An entry type that publishes the result of an expression over any number of live paths and constants. Each input path is given a short name, because paths contain dots and dashes that an expression would read as operators. Expressions are parsed by `expr-eval-fork` with assignment, function definitions, arrays, string concatenation and property access switched off, and are never passed to JavaScript's `eval`.
+- **Period Counters**: An entry type that publishes how much a running total has changed since the start of the day, week, month or year, or since a manual reset. It can count increases only, decreases only (a falling tank level becomes consumption) or the net change, with a smallest-change setting that keeps sensor ripple out of the total.
+- **Integrations**: An entry type that adds up an input over time. One mode multiplies the value by the elapsed time (power into energy, flow into volume); the other adds up the time the input spends above a threshold (engine running time, time a switch is on). A regularly sampled input is joined by straight lines between values, and an input with a stale timeout of `0` is held at its last value and extended every second.
+- **Selectable Resets**: Period boundaries are computed in a configurable IANA time zone with a configurable start of day and first day of the week, including on the 23-hour and 25-hour days of a daylight saving change. As an alternative, a total can reset whenever another path's value falls, so that a calculated daily total keeps step with a device that resets its own daily figure at its own time.
+- **Chaining**: An entry can use another entry's output as an input. Entries are calculated in dependency order, each once per incoming update, so values that arrive together are applied together. A reset, a period rollover, a missing result and a stale input all reach the entries downstream. Entries that feed each other in a loop are refused with a message while the remaining entries run.
+- **Stale Input Handling**: A per-entry stale timeout, with a per-entry choice between stopping publication and continuing to publish the last result. A formula is not recalculated while one of its inputs is stale. For integrations, a gap longer than the timeout is left out of the total by default and can optionally be bridged with the last value.
+- **State Persistence**: Totals, baselines and period starts are saved to `state.json` in the plugin's data directory every 30 seconds when changed, on stop and at every reset. The file is written to a temporary file, flushed to disk and renamed over the previous one, so an interrupted save leaves the old file or the new one, and it is rewritten in place, so it does not grow.
+- **Clock Safety**: Elapsed time is measured on a monotonic clock, and period resets pause while the system clock reads earlier than 2024 or earlier than the last saved state. A computer without a clock battery that boots at 1970 therefore neither resets its totals nor counts the correction as elapsed time. A clock that is wrong but plausible cannot be detected.
+- **Unit Metadata**: Each output path is announced with its unit, display name and description, so the Data Browser and instrument displays can label it.
+- **Status Page**: A page under Webapps lists every entry with its current value, state, explanatory message and the time counting began, and offers a reset button with a confirmation step for counters and integrations. Values are shown in an everyday unit with the published SI value beneath.
+- **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
+- **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
+
+[0.1.0]: https://github.com/Peter-Petrik/signalk-calc-paths/releases/tag/v0.1.0

@@ -1,0 +1,353 @@
+/*
+ * Calculated Paths status page.
+ *
+ * The page is a log sheet: one ruled line per calculated path, with the
+ * reading set large in tabular figures. Colours come from a paper chart:
+ * off-white paper, ink blue-black, shoal blue for the working accent, and
+ * the buoy colours for state. System fonts only, because a boat's server is
+ * often offline and cannot fetch web fonts.
+ */
+
+:root {
+  --paper: #f6f8f7;
+  --sheet: #ffffff;
+  --ink: #15242e;
+  --ink-soft: #51626d;
+  --rule: #d5dde0;
+  --shoal: #0d5c7d;
+  --shoal-wash: #e3eff3;
+  --starboard: #1a7a52;
+  --caution: #a8650a;
+  --port: #b3261e;
+  --focus: #0d5c7d;
+
+  --sans: "Avenir Next", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1a21;
+    --sheet: #15232c;
+    --ink: #e6eef1;
+    --ink-soft: #9db0ba;
+    --rule: #2a3c47;
+    --shoal: #6fc3df;
+    --shoal-wash: #1c323d;
+    --starboard: #5fcf9b;
+    --caution: #e5b25a;
+    --port: #ff8a80;
+    --focus: #6fc3df;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.masthead,
+main,
+footer {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem 2rem;
+  padding-top: 2rem;
+  padding-bottom: 1.25rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+.context {
+  margin: 0.35rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+}
+
+.settings-link {
+  color: var(--shoal);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 2px solid currentColor;
+  padding-bottom: 1px;
+}
+
+.settings-link:hover {
+  border-bottom-color: transparent;
+}
+
+a:focus-visible,
+button:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Notices: page-level messages above the list. */
+
+.notice {
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--shoal-wash);
+  border-left: 4px solid var(--shoal);
+}
+
+.notice.is-warning {
+  border-left-color: var(--caution);
+}
+
+.notice.is-error {
+  border-left-color: var(--port);
+}
+
+.notice a {
+  color: inherit;
+  font-weight: 600;
+}
+
+/* The log sheet. */
+
+.entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--sheet);
+  border-top: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+}
+
+.entries:empty {
+  display: none;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, auto);
+  grid-template-areas:
+    "what reading"
+    "detail action";
+  column-gap: 2rem;
+  row-gap: 0.4rem;
+  padding: 1.1rem 1.25rem 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.entry:first-child {
+  border-top: 0;
+}
+
+.entry-what {
+  grid-area: what;
+  min-width: 0;
+}
+
+.entry-name {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.entry-path {
+  margin: 0.15rem 0 0;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.entry-reading {
+  grid-area: reading;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.reading-figure {
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.reading-unit {
+  margin-left: 0.3rem;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.reading-raw {
+  margin: 0.1rem 0 0;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.reading-none {
+  font-size: 2rem;
+  line-height: 1.1;
+  color: var(--rule);
+}
+
+.entry-detail {
+  grid-area: detail;
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+  max-width: 68ch;
+}
+
+.entry-state {
+  font-weight: 600;
+}
+
+.entry.is-ok .entry-state {
+  color: var(--starboard);
+}
+
+.entry.is-waiting .entry-state,
+.entry.is-stale .entry-state {
+  color: var(--caution);
+}
+
+.entry.is-error .entry-state {
+  color: var(--port);
+}
+
+.entry.is-disabled .entry-name,
+.entry.is-disabled .entry-state {
+  color: var(--ink-soft);
+}
+
+.entry-action {
+  grid-area: action;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+button {
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  border: 1.5px solid var(--shoal);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--shoal);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--shoal-wash);
+}
+
+button.is-confirm {
+  background: var(--port);
+  border-color: var(--port);
+  color: var(--sheet);
+}
+
+button.is-quiet {
+  border-color: transparent;
+  color: var(--ink-soft);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.action-result {
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  align-self: center;
+}
+
+.action-result.is-error {
+  color: var(--port);
+}
+
+.placeholder {
+  margin: 0;
+  padding: 2.5rem 1.25rem;
+  background: var(--sheet);
+  border-top: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  color: var(--ink-soft);
+  max-width: none;
+}
+
+.placeholder a {
+  color: var(--shoal);
+  font-weight: 600;
+}
+
+.placeholder[hidden] {
+  display: none;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.9rem;
+  padding-bottom: 2.5rem;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 40rem) {
+  .masthead {
+    padding-top: 1.25rem;
+  }
+
+  .entry {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "what"
+      "reading"
+      "detail"
+      "action";
+    row-gap: 0.5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .entry-reading {
+    text-align: left;
+  }
+
+  .entry-action {
+    justify-content: flex-start;
+  }
+}

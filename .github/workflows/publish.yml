@@ -4,7 +4,8 @@
 #   1. Runs the test suite
 #   2. Extracts the matching version entry from CHANGELOG.md
 #   3. Creates a GitHub Release with those notes
-#   4. Publishes the package to the npm registry
+#   4. Publishes the package to the npm registry, unless that version
+#      is already there
 #
 # Authentication:
 #   - npm: Trusted Publishing (OIDC) — no stored secrets or tokens required.
@@ -102,5 +103,25 @@ jobs:
           body_path: release_notes.md
           name: ${{ github.ref_name }}
 
+      # npm refuses to publish a name and version that already exist. The
+      # first version of a package has to be published by hand, because a
+      # trusted publisher can only be added to a package that is already on
+      # the registry. This check lets the tag for such a version still
+      # produce its GitHub Release without failing at the publish step, and
+      # makes re-running the workflow for a published tag harmless.
+      - name: Check whether this version is already on npm
+        id: registry
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          FOUND="$(npm view "$NAME@$VERSION" version 2>/dev/null || true)"
+          if [ "$FOUND" = "$VERSION" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME@$VERSION is already on npm. The publish step is skipped."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm with provenance
+        if: steps.registry.outputs.published != 'true'
         run: npm publish --provenance --access public

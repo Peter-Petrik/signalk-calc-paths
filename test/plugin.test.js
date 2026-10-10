@@ -103,7 +103,9 @@ test('plugin identity matches the package', () => {
   assert.equal(plugin.id, packageInfo.name)
   assert.equal(plugin.id, packageInfo.signalk.pluginId)
   assert.equal(plugin.name, packageInfo.signalk.displayName)
-  assert.equal(typeof plugin.schema, 'object')
+  // The form is built on request; see the tests of the time zone list.
+  assert.equal(typeof plugin.schema, 'function')
+  assert.equal(plugin.schema().type, 'object')
   assert.equal(typeof plugin.uiSchema, 'object')
   assert.equal(plugin.getOpenApi().info.version, packageInfo.version)
 })
@@ -133,7 +135,14 @@ test('start subscribes to outside paths only, announces units, and publishes res
   assert.equal(app.subscriptions.length, 1)
   const { command } = app.subscriptions[0]
   assert.equal(command.context, 'vessels.self')
-  assert.deepEqual(command.subscribe, [{ path: 'el.current' }, { path: 'el.voltage' }, { path: 'el.yieldTotal' }])
+  // The two paths that carry the ship's time zone are read as well.
+  assert.deepEqual(command.subscribe, [
+    { path: 'el.current' },
+    { path: 'el.voltage' },
+    { path: 'el.yieldTotal' },
+    { path: 'environment.time.timezoneRegion' },
+    { path: 'environment.time.timezoneOffset' }
+  ])
 
   // Metadata goes out first, in one delta.
   assert.deepEqual(app.messages[0], {
@@ -248,7 +257,9 @@ test('the status text is sent only when it changes', (t) => {
   plugin.start({})
   for (let i = 0; i < 30; i++) t.mock.timers.tick(1000)
   assert.deepEqual(app.statuses, ['No entries configured yet'])
-  assert.equal(app.subscriptions.length, 0)
+  // With no entries only the ship's time zone is listened for.
+  assert.equal(app.subscriptions.length, 1)
+  assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: 'environment.time.timezoneRegion' }, { path: 'environment.time.timezoneOffset' }])
   plugin.stop()
 })
 
@@ -423,5 +434,357 @@ test('two readings of one path in the same turn are kept apart', async (t) => {
   assert.equal(app.values()['c.moved'], 30)
   // Each reading was counted: up 50, down 30 (ignored), up 10.
   assert.equal(app.values()['c.up'], 60)
+  plugin.stop()
+})
+
+// ------------------------------------------------------- the ship's time zone
+
+const REGION = 'environment.time.timezoneRegion'
+const OFFSET = 'environment.time.timezoneOffset'
+const daily = { counters: [{ name: 'Today', input: 'c.total', output: 'c.today', resets: 'day', staleTimeout: 0 }] }
+
+/** Asks the status route what the plugin reports. */
+function statusOf (plugin) {
+  const router = fakeRouter()
+  plugin.registerWithRouter(router)
+  return call(router.routes['GET /api/entries'].handler).body
+}
+
+test('with the ship\'s time not followed no time zone path is read', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp({ [REGION]: { value: 'Europe/Athens', timestamp: new Date().toISOString() } })
+  const plugin = createPlugin(app)
+  plugin.start({ timeZoneSource: 'fixed', timeZone: 'Europe/Rome', ...daily })
+  assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: 'c.total' }])
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Rome')
+  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: false, paths: [], path: null, since: null, fallback: 'Europe/Rome', problem: null })
+  // A zone published later is not acted on either.
+  app.send(REGION, 'Europe/Athens')
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Rome')
+  assert.equal(app.statuses.at(-1), '1 entry: 1 waiting for input')
+  plugin.stop()
+
+  // Nothing at all is subscribed to when there is nothing to read.
+  const idle = fakeApp()
+  const other = createPlugin(idle)
+  other.start({ timeZoneSource: 'fixed' })
+  assert.equal(idle.subscriptions.length, 0)
+  other.stop()
+})
+
+test('the ship\'s time zone the server already holds is used from the start', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp({
+    [REGION]: { value: 'Europe/Athens', timestamp: new Date().toISOString() },
+    [OFFSET]: { value: 300, timestamp: new Date().toISOString() }
+  })
+  const plugin = createPlugin(app)
+  plugin.start({ timeZone: 'UTC', ...daily })
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Athens')
+  assert.equal(status.timeZoneLabel, 'Europe/Athens')
+  assert.equal(status.timeZoneSource.kind, 'path')
+  assert.equal(status.timeZoneSource.path, REGION)
+  assert.equal(status.timeZoneSource.fallback, 'UTC')
+  assert.deepEqual(status.timeZoneSource.paths, [REGION, OFFSET])
+  // The dashboard line names a followed zone.
+  assert.equal(app.statuses.at(-1), '1 entry: 1 waiting for input. Time zone Europe/Athens')
+  plugin.stop()
+})
+
+test('with only an offset published the offset is followed', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp({ [OFFSET]: { value: -930, timestamp: new Date().toISOString() } })
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, '-09:30')
+  assert.equal(status.timeZoneLabel, 'UTC-09:30')
+  assert.equal(status.timeZoneSource.path, OFFSET)
+  assert.match(app.statuses.at(-1), /Time zone UTC-09:30$/)
+  plugin.stop()
+})
+
+test('nothing published leaves the zone from the settings in use, and says so', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start({ timeZone: 'Europe/Rome', ...daily })
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Rome')
+  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: true, paths: [REGION, OFFSET], path: null, since: null, fallback: 'Europe/Rome', problem: null })
+  // The dashboard line stays as it was: the zone is not a followed one.
+  assert.equal(app.statuses.at(-1), '1 entry: 1 waiting for input')
+  plugin.stop()
+})
+
+test('a zone published while running moves the day boundary', (t) => {
+  // 23:20 in Rome on 10 October; Rome is two hours ahead of UTC.
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-10T21:20:00Z') })
+  const app = fakeApp({ [REGION]: { value: 'Europe/Rome', timestamp: '2026-10-10T08:00:00Z' } })
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  app.send('c.total', 1000)
+  app.send('c.total', 1500)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.today'], 500)
+
+  // The ship moves to Athens time: 00:20 on the 11th. A new day has begun.
+  app.send(REGION, 'Europe/Athens')
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.today'], 0)
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Athens')
+  assert.match(status.entries[0].message, /time zone changed/)
+  assert.match(app.statuses.at(-1), /Time zone Europe\/Athens$/)
+
+  // Back to Rome: 23:20 on the 10th again. The 11th is not started twice.
+  app.send('c.total', 1600)
+  app.send(REGION, 'Europe/Rome')
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.today'], 100)
+  t.mock.timers.tick(45 * 60000)
+  app.send('c.total', 1700)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.today'], 200)
+  plugin.stop()
+})
+
+test('the zone followed is saved and remembered at the next start', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  let plugin = createPlugin(app)
+  plugin.start(daily)
+  app.send(OFFSET, 300)
+  app.send(REGION, 'Europe/Athens')
+  plugin.stop()
+
+  const saved = JSON.parse(fs.readFileSync(path.join(app.dataDir, 'state.json'), 'utf8'))
+  assert.equal(saved.version, 1)
+  assert.equal(saved.zone.zone, 'Europe/Athens')
+  assert.equal(saved.zone.path, REGION)
+  assert.equal(saved.zone.regionPath, REGION)
+  assert.equal(saved.zone.offsetPath, OFFSET)
+
+  // The server has just restarted and holds no zone yet.
+  app.subscriptions = []
+  plugin = createPlugin(app)
+  plugin.start(daily)
+  let status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Athens')
+  assert.equal(status.timeZoneSource.kind, 'remembered')
+  assert.match(app.statuses.at(-1), /Time zone Europe\/Athens$/)
+  // The source speaks again and the zone is confirmed.
+  app.send(REGION, 'Europe/Athens')
+  status = statusOf(plugin)
+  assert.equal(status.timeZoneSource.kind, 'path')
+  plugin.stop()
+
+  // Switching to the fixed setting forgets it.
+  app.subscriptions = []
+  plugin = createPlugin(app)
+  plugin.start({ timeZoneSource: 'fixed', ...daily })
+  assert.equal(statusOf(plugin).timeZoneSource.kind, 'server')
+  plugin.stop()
+  assert.equal(JSON.parse(fs.readFileSync(path.join(app.dataDir, 'state.json'), 'utf8')).zone, null)
+})
+
+test('a zone replayed when the subscription is made is used', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  app.replay = [
+    { context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: new Date().toISOString(), values: [{ path: OFFSET, value: 200 }] }] },
+    { context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: new Date().toISOString(), values: [{ path: REGION, value: 'Europe/Rome' }] }] }
+  ]
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Rome')
+  assert.equal(status.timeZoneSource.kind, 'path')
+  plugin.stop()
+})
+
+test('a custom path can carry the zone', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start({ timeZoneRegionPath: 'my.ship.zone', timeZoneOffsetPath: 'my.ship.offset', ...daily })
+  assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: 'c.total' }, { path: 'my.ship.zone' }, { path: 'my.ship.offset' }])
+  // The standard path is no longer listened to.
+  app.send(REGION, 'Europe/Athens')
+  assert.notEqual(statusOf(plugin).timeZone, 'Europe/Athens')
+  app.send('my.ship.offset', 545)
+  assert.equal(statusOf(plugin).timeZone, '+05:45')
+  app.send('my.ship.zone', 'Asia/Kathmandu')
+  assert.equal(statusOf(plugin).timeZone, 'Asia/Kathmandu')
+  assert.equal(statusOf(plugin).timeZoneSource.path, 'my.ship.zone')
+  plugin.stop()
+})
+
+test('a followed path that holds something else is reported without failing the plugin', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start({ timeZone: 'Europe/Rome', ...daily })
+  app.send(REGION, { latitude: 37.9, longitude: 23.7 })
+  app.send(OFFSET, 'three hours')
+  t.mock.timers.tick(1000)
+  const status = statusOf(plugin)
+  assert.equal(status.timeZone, 'Europe/Rome')
+  assert.equal(status.timeZoneSource.kind, 'setting')
+  assert.match(status.timeZoneSource.problem, /is not a time zone name or an offset/)
+  // It is a notice on the status page, not a red plugin error.
+  assert.deepEqual(app.errors, [])
+  assert.deepEqual(status.problems, [])
+  plugin.stop()
+})
+
+test('a path that is both an input and a followed path serves both', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start({ formulas: [{ inputs: [{ name: 'o', path: OFFSET }], expression: 'o / 100', output: 'c.offsetHours', staleTimeout: 0 }] })
+  // Subscribed once, not twice.
+  assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: OFFSET }, { path: REGION }])
+  app.send(OFFSET, 300)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.offsetHours'], 3)
+  assert.equal(statusOf(plugin).timeZone, '+03:00')
+  plugin.stop()
+})
+
+test('a server without a subscription manager is reported, not crashed into', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  delete app.subscriptionmanager
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  assert.ok(app.logged.some((line) => /no subscription manager/.test(line)))
+  t.mock.timers.tick(1000)
+  plugin.stop()
+})
+
+test('the same published values give the same zone live and at a restart', (t) => {
+  // Ship's Time in manual mode with an offset of three hours and the region
+  // Europe/Athens, set in summer. On 26 October the two disagree. Both are
+  // published in one update, so the name is followed, and it must still be
+  // followed when the plugin is restarted and reads them from the server.
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-26T21:30:00Z') })
+  const published = '2026-10-26T08:00:00.000Z'
+  const app = fakeApp()
+  let plugin = createPlugin(app)
+  plugin.start(daily)
+  app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: published, values: [{ path: OFFSET, value: 300 }] }] })
+  app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: published, values: [{ path: REGION, value: 'Europe/Athens' }] }] })
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
+  app.send('c.total', 1000)
+  app.send('c.total', 1500)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['c.today'], 500)
+  plugin.stop()
+
+  // Restarted: the server holds both values and hands them over.
+  const held = fakeApp({
+    [REGION]: { value: 'Europe/Athens', timestamp: published },
+    [OFFSET]: { value: 300, timestamp: published }
+  })
+  held.dataDir = app.dataDir
+  plugin = createPlugin(held)
+  plugin.start(daily)
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
+  held.send('c.total', 1600)
+  t.mock.timers.tick(1000)
+  // The day's total carried over: no boundary moved.
+  assert.equal(held.values()['c.today'], 600)
+  assert.equal(statusOf(plugin).entries[0].message, '')
+  plugin.stop()
+})
+
+test('a name and an offset that come to disagree are noticed within a minute', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-24T22:00:00Z') })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  // The name was published yesterday; the offset, set by hand, today.
+  app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ timestamp: '2026-10-23T12:00:00Z', values: [{ path: REGION, value: 'Europe/Athens' }] }] })
+  app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ timestamp: '2026-10-24T11:00:00Z', values: [{ path: OFFSET, value: 300 }] }] })
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
+  // Athens goes back an hour at 01:00 UTC on the 25th. Up to then the two
+  // agree and nothing changes.
+  t.mock.timers.tick(3 * 3600000 - 1000)
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
+  // Nothing is published at the change. Within a minute of it the plugin
+  // has noticed that the ship keeps three hours and Athens now keeps two.
+  t.mock.timers.tick(61000)
+  assert.equal(statusOf(plugin).timeZone, '+03:00')
+  assert.equal(statusOf(plugin).timeZoneSource.path, OFFSET)
+  plugin.stop()
+})
+
+test('the form keeps a saved zone that its list does not hold', () => {
+  const zoneList = (plugin) => plugin.schema().properties.timeZone
+  // Saved by version 0.1.0 as free text: a name the list lacks.
+  const app = fakeApp()
+  app.readPluginOptions = () => ({ enabled: true, configuration: { timeZone: 'US/Eastern' } })
+  const plugin = createPlugin(app)
+  const field = zoneList(plugin)
+  assert.ok(field.enum.includes('US/Eastern'))
+  assert.equal(field.enumNames.length, field.enum.length)
+  assert.equal(field.enumNames[field.enum.indexOf('US/Eastern')], 'US/Eastern (as saved)')
+
+  // A zone that is in the list, the server's zone, nothing, and text that
+  // names no zone add nothing.
+  const base = zoneList(createPlugin(fakeApp())).enum.length
+  for (const timeZone of ['Europe/Athens', 'server', '', undefined, null, 'Atlantis/Central', 42]) {
+    const other = fakeApp()
+    other.readPluginOptions = () => ({ configuration: { timeZone } })
+    assert.equal(zoneList(createPlugin(other)).enum.length, base, String(timeZone))
+  }
+
+  // A server that cannot hand over the saved options: the zone the plugin
+  // was last started with is used.
+  const bare = fakeApp()
+  bare.readPluginOptions = () => { throw new Error('not available') }
+  const started = createPlugin(bare)
+  assert.equal(zoneList(started).enum.length, base)
+  started.start({ timeZone: 'europe/athens' })
+  assert.ok(zoneList(started).enum.includes('europe/athens'))
+  started.stop()
+
+  // Each call returns a fresh object: changing one does not leak into the next.
+  const first = plugin.schema()
+  first.properties.timeZone.enum.push('Changed/ByCaller')
+  assert.ok(!plugin.schema().properties.timeZone.enum.includes('Changed/ByCaller'))
+})
+
+test('totals saved by version 0.1.0 survive the upgrade when a zone further west is followed', (t) => {
+  // 0.1.0 ran with the zone setting Europe/Athens and saved period starts
+  // at Athens midnight. After the upgrade the ship's time is followed and
+  // reads Europe/Rome, where that same instant is still the day before.
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-10T10:00:00Z') })
+  const app = fakeApp({ [REGION]: { value: 'Europe/Rome', timestamp: '2026-10-10T09:00:00Z' } })
+  const start = (iso) => Date.parse(iso)
+  const record = (resets, periodStart) => ({ signature: 'counter|c.total|increase', resets, resetPath: null, total: 1000, since: periodStart, periodStart, referenceLast: null, last: 5000 })
+  fs.mkdirSync(app.dataDir, { recursive: true })
+  fs.writeFileSync(path.join(app.dataDir, 'state.json'), JSON.stringify({
+    version: 1,
+    savedAt: start('2026-10-10T09:59:00Z'),
+    entries: {
+      'c.day': record('day', start('2026-10-09T21:00:00Z')),
+      'c.week': record('week', start('2026-10-04T21:00:00Z')),
+      'c.month': record('month', start('2026-09-30T21:00:00Z')),
+      'c.year': record('year', start('2025-12-31T22:00:00Z'))
+    }
+  }))
+  const plugin = createPlugin(app)
+  plugin.start({
+    timeZone: 'Europe/Athens',
+    counters: ['day', 'week', 'month', 'year'].map((resets) => ({ input: 'c.total', output: `c.${resets}`, resets, staleTimeout: 0 }))
+  })
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Rome')
+  app.send('c.total', 5100)
+  t.mock.timers.tick(1000)
+  assert.deepEqual(app.values(), { 'c.day': 1100, 'c.week': 1100, 'c.month': 1100, 'c.year': 1100 })
   plugin.stop()
 })

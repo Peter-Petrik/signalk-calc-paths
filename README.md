@@ -5,7 +5,7 @@ This plugin calculates new Signal K paths from existing ones and publishes them 
 
 ## Project Status
 
-New and actively maintained. Version 0.1.0 is the first public release: the calculations are covered by automated tests and were checked against recorded data from a boat, and the plugin has run inside Signal K server 2.33.0. Wider field use is still to come. See [CHANGELOG.md](CHANGELOG.md) for release history and [Issues](https://github.com/Peter-Petrik/signalk-calc-paths/issues) for planned work.
+New and actively maintained. The first public release was 0.1.0, in October 2026. The calculations are covered by automated tests and were checked against recorded data from a boat, and the plugin has run inside Signal K server 2.33.0. Wider field use is still to come. See [CHANGELOG.md](CHANGELOG.md) for release history and [Issues](https://github.com/Peter-Petrik/signalk-calc-paths/issues) for planned work.
 
 The plugin publishes calculated values into Signal K paths. It is not an automation tool and does not replace Node-RED: it switches nothing and raises no notifications.
 
@@ -14,7 +14,8 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 - **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`.
 - **Period Counters**: The change in a running total since the start of the day, week, month or year, or since a manual reset. Counting increases suits lifetime energy and engine run time; counting decreases turns a falling tank level into consumption.
 - **Integrations**: A rate added up over time (power into energy, flow into volume), or the time an input spends above a threshold (engine running time, time a switch is on).
-- **Selectable Resets**: Each total resets at a boundary in a configured time zone, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
+- **Selectable Resets**: Each total resets at the start of a day, week, month or year, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
+- **Ship's Time Zone (v0.2.0+)**: Days begin at local midnight in the time zone the vessel keeps. The zone is read from Signal K, where a plugin such as Ship's Time publishes it, and changes by itself when the boat changes time zone. A zone chosen in the settings is used when nothing is published.
 - **Chaining**: An entry can read the output of another entry. A formula can feed an integration, and a counter can feed a formula. Entries are calculated in dependency order, each once per incoming update.
 - **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry.
 - **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
@@ -30,8 +31,11 @@ Settings are entered under **Apps & Plugins > Configuration > Calculated Paths**
 
 | Setting | Default | Meaning |
 | :--- | :--- | :--- |
-| Time zone | server's zone | IANA time zone name, for example `Europe/Athens`, that decides when a day begins. Many boat computers run on UTC, in which case the server's zone is not local time. |
-| Day starts at | `00:00` | Time of day, as `HH:MM`, at which a new day begins. Weeks, months and years begin at the same time of day. |
+| Time zone for day boundaries | Follow the ship's time published in Signal K | Follow the ship's time, or always use the time zone chosen below. See [Time Zones and Day Boundaries](#time-zones-and-day-boundaries). |
+| Path that carries the time zone name | `environment.time.timezoneRegion` | Read when following the ship's time. Expected to hold a zone name such as `Europe/Athens`. |
+| Path that carries the UTC offset | `environment.time.timezoneOffset` | Read when following the ship's time and no zone name is published. Expected to hold a number such as `300`. |
+| Time zone when none is published | The server's own time zone | A list with the server's zone, UTC, the fixed offsets from UTC-12:00 to UTC+14:00, and the named zones. Many boat computers run on UTC, in which case the server's zone is not local time. |
+| Day starts at | `00:00` | Time of day, as `HH:MM` in the time zone in use, at which a new day begins. Weeks, months and years begin at the same time of day. |
 | Week starts on | Monday | Monday, Sunday or Saturday. |
 | Repeat unchanged values every | 10 s | A result is published when it changes, at most once a second. An unchanged result is sent again at this interval. `0` publishes changes only. |
 
@@ -80,18 +84,104 @@ Assignment, function definitions, arrays, string concatenation and property acce
 | Resets, Path to follow for resets | Every day | As for period counters. |
 | When values stop for longer than the stale timeout | Leave the gap out | Leave the gap out of the total, or bridge it with the last value. |
 
+## Time Zones and Day Boundaries
+
+A total that resets "every day" resets at midnight, and midnight depends on the time zone. The same holds for weeks, months and years, which begin at the same time of day. This section explains which time zone the plugin uses and what happens when it changes. Entries that reset when another path resets, or only by hand, are not affected by any of it.
+
+### Which Time Zone Is Used
+
+With **Time zone for day boundaries** set to follow the ship's time, the plugin takes the first of these that is available:
+
+1. **The zone name published in Signal K.** The path `environment.time.timezoneRegion` holds a name such as `Europe/Athens`. A name is preferred because it carries the zone's daylight saving rules.
+2. **The UTC offset published in Signal K.** The path `environment.time.timezoneOffset` holds a number such as `300`. Both paths are defined by the Signal K specification as the time zone the vessel keeps. It is used when no name is published. It is also used when it was published after the name and disagrees with it, which happens when a source stops publishing a name and the old one is still held by the server. Which of the two is newer is read from their time stamps. A name and an offset published together are taken as belonging together, and the name is used.
+3. **The last zone followed.** It is remembered across restarts, so that a restart does not fall back to the setting while the source has not spoken yet.
+4. **The zone chosen under "Time zone when none is published".** The default choice is the server's own time zone.
+5. **UTC**, if the server's time zone cannot be read.
+
+With the setting on "Always use the time zone chosen below", only steps 4 and 5 apply and nothing is read from Signal K.
+
+The status page states the zone in use and where it comes from, for example "Days begin at 00:00, Europe/Athens time, the ship's time read from environment.time.timezoneRegion." The plugin's status line in the admin UI includes "Time zone Europe/Athens" while a zone is being followed.
+
+### Setting It Up
+
+**A ship's time plugin is installed.** Nothing needs to be set in this plugin. The [Ship's Time](https://www.npmjs.com/package/@meri-imperiumi/signalk-ships-time) plugin, in its automatic mode, works out the zone from the vessel's position and publishes both standard paths, and they are followed as installed.
+
+Ship's Time itself needs one look. Version 0.1.0 of it is enabled as soon as it is installed and starts in manual mode with an offset of zero, which is UTC. Until it is switched to automatic, or given the right offset, it publishes UTC and this plugin follows that, whatever zone is chosen in the settings here. The status page shows the zone in use, which makes this easy to spot.
+
+**Another source publishes the zone.** Custom code, Node-RED or another plugin can publish the zone on any path. That path is entered under **Path that carries the time zone name** or **Path that carries the UTC offset**, depending on what it holds. Either field accepts either form, and the same path may be entered in both.
+
+**Nothing publishes the zone.** A zone is picked under **Time zone when none is published**. A named zone such as `Europe/Athens` is the better choice where one fits, because it changes with daylight saving by itself. A fixed offset such as "UTC+03:00" never changes: it has to be changed by hand when the clocks change and when the boat moves to another zone.
+
+**Nothing is set at all.** The server's own time zone is used. On a boat computer set to UTC, a day then runs from midnight UTC, which is 02:00 or 03:00 by the clock in the eastern Mediterranean.
+
+### What a Followed Path May Hold
+
+| Value on the path | Read as |
+| :--- | :--- |
+| `"Europe/Athens"` | The named zone, with its daylight saving rules. |
+| `"Pacific/Marquesas"` | The named zone, 9 hours 30 minutes behind UTC. |
+| `300` | 3 hours ahead of UTC. The number is hours and minutes written together, as the Signal K specification defines the offset path. |
+| `-930` | 9 hours 30 minutes behind UTC. |
+| `545` | 5 hours 45 minutes ahead of UTC. |
+| `0` | UTC. |
+| `"+03:00"`, `"UTC+3"` | 3 hours ahead of UTC, written as text. |
+| `180`, `10800` | Refused. `180` would be 1 hour 80 minutes, and `10800` is further from UTC than any clock. An offset given in minutes or seconds is not understood. |
+| `3` | 3 minutes ahead of UTC, not 3 hours. An offset given in whole hours is misread; `300` is the form for 3 hours. |
+| `null` | No value. On the name path the offset is then used, if one is published; otherwise the last zone followed stays in use. |
+| An object, other text | Not used, and reported on the status page. |
+
+A value that cannot be read is never used. It is reported on the status page for as long as the path holds it, also when the other path is fine: an unreadable name means the zone's daylight saving rules are not being followed.
+
+### When the Boat Changes Time Zone
+
+A total belongs to a calendar date. When the time zone changes, the plugin asks one question: has a later date begun? If so, the total is cleared. If not, it carries on. A total is never cleared twice for the same date.
+
+This is the same thing that happens to every clock twice a year at a daylight saving change: one day is an hour short and another an hour long.
+
+**Example 1: sailing east, away from midnight.** The boat goes from Italian time to Greek time at 14:00 on 10 October. The clock becomes 15:00, still 10 October. Nothing is cleared. The day's total carries on and resets at Greek midnight, so that day was 23 hours long.
+
+**Example 2: sailing east, across midnight.** The change comes at 23:30 Italian time on 10 October. The clock becomes 00:30 on 11 October: a new date has begun.
+
+| Time | Clock | What happens |
+| :--- | :--- | :--- |
+| Before the change | 23:30, 10 October, Italian time | The total for 10 October stands at 5.2 kWh. |
+| The change | 00:30, 11 October, Greek time | The total is cleared. Counting for 11 October starts here. |
+| An hour later | 01:30, 11 October | The total holds what was produced since the change. |
+| Next midnight | 00:00, 12 October | The total is cleared as on any other day. |
+
+The half hour between Greek midnight and the change was counted in the total for 10 October, which is gone. The total for 11 October therefore starts at the moment of the change, and the status page says so: "The time zone changed and a new period had already begun in the new zone. This period is counted from the moment of the change."
+
+**Example 3: sailing west, back across midnight.** The change comes at 00:30 Greek time on 11 October, half an hour after the day's total was cleared. The clock becomes 23:30 on 10 October: the date has stepped back.
+
+| Time | Clock | What happens |
+| :--- | :--- | :--- |
+| Greek midnight | 00:00, 11 October, Greek time | The total is cleared. Counting for 11 October starts. |
+| The change | 23:30, 10 October, Italian time | Nothing is cleared. The total for 11 October carries on. |
+| Half an hour later | 00:00, 11 October, Italian time | The 11th begins a second time. Nothing is cleared. |
+| Next midnight | 00:00, 12 October | The total is cleared. The total for 11 October covered 25 hours. |
+
+While the date is behind the total, the status page says: "The date has stepped back since this period began, as it does when the time zone changes going west. This period carries on until the next one begins."
+
+**Weeks, months and years** follow the same rule. A change of zone at 23:30 on 31 October that makes it 00:30 on 1 November starts the new month at once.
+
+### Restarts
+
+The last zone followed is saved with the totals. After a restart the plugin starts in that zone and the status page says the zone was "last read" from its path until the source publishes it again. If the source publishes a different zone, for instance because the boat moved while the server was off, the change is handled as described above.
+
+Switching **Time zone for day boundaries** to the fixed setting, or changing either path, discards the remembered zone.
+
 ## How the Calculations Behave
 
 ### Period Boundaries
 
 1. The baseline of a period is the last input value seen before the boundary. At the boundary the output publishes `0`.
 2. Change that arrives with the first value after a boundary belongs to the new period. With an input that reports every few seconds this moves at most a few seconds of change across the boundary.
-3. Days follow the configured time zone, including its daylight saving changes: a day is 23 or 25 hours long on the two change dates. Where a clock change skips the day-start time itself, that day begins later by the length of the skipped stretch; where the day-start time occurs twice, the day begins the first time.
+3. Days follow the time zone in use (see [Time Zones and Day Boundaries](#time-zones-and-day-boundaries)), including its daylight saving changes: a day is 23 or 25 hours long on the two change dates. Where a clock change skips the day-start time itself, that day begins later by the length of the skipped stretch; where the day-start time occurs twice, the day begins the first time.
 4. With "When another path resets", the boundary settings are not used. The total clears whenever the followed value falls. A fall that happened while the server was stopped is noticed at restart only if the followed value is still below the last one seen before the stop.
 
 ### Restarts
 
-1. Totals, baselines and period starts are restored from the state file. Changing an entry's **Resets** setting clears its total, because a total collected under one rule means nothing under another; a period counter keeps its place in its input.
+1. Totals, baselines, period starts and the last time zone followed are restored from the state file. Changing an entry's **Resets** setting clears its total, because a total collected under one rule means nothing under another; a period counter keeps its place in its input.
 2. A period counter resumes from the last input value it saw. Whatever the source counted while the server was stopped is added when the first new value arrives. If a boundary passed in the meantime, that change lands in the current period and the status page says so.
 3. An integration adds nothing for the time the server was stopped.
 4. Values the server already holds when the plugin starts are used at once, each judged against the stale timeout by its real age. An integration counts from the start, not from the age of such a value.
@@ -180,31 +270,36 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 2. After a crash or power cut, up to 30 seconds of an integration's total can be lost: changed totals are written to disk every 30 seconds, on a clean stop and at every reset. While any total is changing, the state file is therefore rewritten every 30 seconds.
 3. The first value an entry ever sees only sets its starting point. The first period after an entry is created is therefore partial; the status page shows when counting began.
 4. A period counter in a one-way mode counts every change of at least the smallest change. Sensor noise larger than that setting is counted as real change.
-5. The time zone is a setting. It does not follow the boat's position.
-6. Period resets depend on the system clock being correct. An unset clock is detected; a wrong but plausible one is not. See [System Clock](#system-clock).
-7. Units are neither checked nor converted. The unit entered is published as given, and a formula that mixes units must convert them itself.
-8. Only numbers and true/false values can be read. A field inside an object value cannot be selected.
-9. The plugin does not check whether another source already writes an output path. Two writers on one path give alternating values.
-10. A formula is evaluated on every input value and published at most once a second. It does not average or smooth.
-11. "When another path resets" treats any fall of the followed value as a reset.
-12. Published numbers are rounded to twelve significant digits.
-13. Node.js 22 or later is required.
+5. A followed time zone is as good as its source. The plugin does not work out a zone from the position itself; it reads what another plugin publishes. A source that looks the zone up from old or coarse data can be wrong near borders and on the open ocean.
+6. At a change of zone that jumps over a boundary, whatever was counted between the new zone's boundary and the moment of the change stays in the total of the period that ended. With a one-hour change this is at most an hour of counting. See [When the Boat Changes Time Zone](#when-the-boat-changes-time-zone).
+7. A fixed offset does not follow daylight saving. Where the offset path is the only source, the day boundary is right only as long as that source updates the offset when the clocks change.
+8. A total is cleared at most once for a calendar date. A vessel that crosses the date line eastward lives the same date twice, and one total then covers both.
+9. A zone name left behind in the server by a source that no longer publishes it is believed until a newer offset contradicts it. Name and offset are compared again every minute, so a disagreement that only arises at a daylight saving change is noticed then.
+10. Period resets depend on the system clock being correct. An unset clock is detected; a wrong but plausible one is not. See [System Clock](#system-clock).
+11. Units are neither checked nor converted. The unit entered is published as given, and a formula that mixes units must convert them itself.
+12. Only numbers and true/false values can be read. A field inside an object value cannot be selected.
+13. The plugin does not check whether another source already writes an output path. Two writers on one path give alternating values.
+14. A formula is evaluated on every input value and published at most once a second. It does not average or smooth.
+15. "When another path resets" treats any fall of the followed value as a reset.
+16. Published numbers are rounded to twelve significant digits.
+17. Node.js 22 or later is required.
 
 ## Prerequisites
 
 - **Signal K Server**: Developed and tested on Signal K server 2.33.0.
 - **Node.js**: Version 22 or later.
 - **Input Paths**: The paths to calculate from must already be present in Signal K. **Data > Browser** shows them with their units.
+- **Ship's Time (optional)**: A plugin that publishes the vessel's time zone, such as [Ship's Time](https://www.npmjs.com/package/@meri-imperiumi/signalk-ships-time), lets day boundaries follow the boat. Without one, a time zone is chosen in the settings.
 
 ## Quick Start Guide
 
 1. Open the Signal K admin UI, navigate to **Apps & Plugins > Store** and install `signalk-calc-paths`.
 2. Restart the server when prompted.
 3. Go to **Apps & Plugins > Configuration > Calculated Paths**.
-4. Set the **Time zone** if the server does not run on local time.
+4. Check the time zone. With a ship's time plugin installed nothing needs to be set. Otherwise pick a zone under **Time zone when none is published** if the server does not run on local time.
 5. Add an entry to **Formulas**, **Period counters** or **Integrations**, fill in its paths and unit, and enable the plugin.
 6. Click **Submit**.
-7. Open **Webapps > Calculated Paths** to see each entry's value and state.
+7. Open **Webapps > Calculated Paths** to see each entry's value and state, and the time zone in use.
 8. Check the new path under **Data > Browser**.
 
 ## Technical Details
@@ -219,7 +314,7 @@ The page shows each value in an everyday unit (Wh or kWh for joules, hours and m
 
 | Request | Access | Result |
 | :--- | :--- | :--- |
-| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state and message. |
+| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state and message, and the time zone in use with its source. |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration. |
 
 The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
@@ -232,7 +327,7 @@ Totals are kept in one file in the plugin's data directory:
 ~/.signalk/plugin-config-data/signalk-calc-paths/state.json
 ```
 
-The file is rewritten in place and holds one small record per counter and integration. It keeps no history and does not grow. Removing an entry from the configuration removes its record at the next save; disabling an entry keeps it. An entry's record is discarded when its output path, its input path, its direction, its integration mode or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
+The file is rewritten in place and holds one small record per counter and integration, and the last time zone followed. It keeps no history and does not grow. Removing an entry from the configuration removes its record at the next save; disabling an entry keeps it. An entry's record is discarded when its output path, its input path, its direction, its integration mode or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
 
 To clear every total, stop the plugin, delete the file and start the plugin. A file that cannot be read is moved aside as `state.json.unreadable-<number>` and reported in the plugin status.
 
@@ -266,7 +361,13 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 **An entry shows "Stale".** The input stopped updating for longer than the stale timeout. For an input that is sent only when it changes, set the stale timeout to `0`.
 
-**A daily total resets at the wrong time.** The time zone is empty and the server runs on UTC. Set the **Time zone**.
+**A daily total resets at the wrong time.** The status page states the time zone in use and where it comes from. If it says UTC read from a followed path, the plugin publishing the ship's time is probably still at its default; see [Setting It Up](#setting-it-up). If it says the server's own time zone and the server runs on UTC, either install a ship's time plugin or pick a zone under **Time zone when none is published**. If it names a followed path, the zone published there is the one to check, under **Data > Browser**.
+
+**The status page says no ship's time has been published.** Nothing has arrived on either followed path. Check under **Data > Browser** that `environment.time.timezoneRegion` or `environment.time.timezoneOffset` exists, and that the plugin publishing it is enabled. A ship's time plugin that works from the position publishes nothing until the vessel has a position.
+
+**The status page says a followed value is not a time zone.** The path holds something other than a zone name or an offset in hours and minutes. See [What a Followed Path May Hold](#what-a-followed-path-may-hold).
+
+**A daily total was cleared, or not cleared, when the boat changed time zone.** This follows the calendar date. See the examples under [When the Boat Changes Time Zone](#when-the-boat-changes-time-zone).
 
 **The status reports a configuration error.** One entry cannot run: a path is missing or malformed, an expression does not parse, two entries write the same path, or entries feed each other in a loop. The other entries keep running. The message names the entry.
 
@@ -278,7 +379,6 @@ These are not implemented.
 
 * **Previous-Period Values**: Publishing the finished total of the last period, such as yesterday's yield, on a second path.
 * **Fields Inside Object Values**: Reading one field of an object-valued path.
-* **Time Zone From Position**: Following a time zone published in Signal K instead of a fixed setting.
 * **Reset by Signal K PUT**: Resetting a total from another plugin or a phone shortcut.
 * **Averages and Extremes**: A fourth entry type for the mean, minimum or maximum over a period.
 
@@ -294,6 +394,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 ![Status page](screenshots/webapp-status.png)
 
 ### Plugin Configuration
+![Time zone settings](screenshots/configuration-timezone.png)
 ![Period counter settings](screenshots/configuration-counter.png)
 ![Formula settings](screenshots/configuration-formula.png)
 

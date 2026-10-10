@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-10-10
+
+### Added
+- **Ship's Time Zone**: Day, week, month and year boundaries can follow the time zone the vessel keeps, read from Signal K. The standard paths `environment.time.timezoneRegion` (a zone name) and `environment.time.timezoneOffset` (hours and minutes as one number) are read by default, so a plugin such as Ship's Time is followed without any setup. A name is preferred to an offset; an offset published later than the name, and disagreeing with it, takes over. This is the default for new and existing installations; with nothing published on those paths the behaviour is as before. An installation where Ship's Time is still at its default of manual mode and offset zero will follow UTC until that plugin is configured.
+- **Configurable Paths for the Zone**: The two paths can be changed, for installations where custom code or another plugin publishes the zone elsewhere. Either path accepts a zone name, a fixed offset written as text, or the specification's number form.
+- **Zone Changes Follow the Calendar**: A total belongs to a calendar date and is cleared when a later date begins, never twice for the same date. A change of zone therefore behaves like a daylight saving change: going east over a boundary starts the new period at once, and going west back over a boundary carries the period on until the next one begins. The status page explains either case on the entry concerned.
+- **Remembered Zone**: The last zone followed is saved with the totals and used after a restart until the source publishes again, so a restart cannot move a day boundary.
+- **Time Zone List**: The time zone setting is now a list holding the server's own zone, UTC, the fixed offsets from UTC-12:00 to UTC+14:00 including the part-hour ones, and the zone names the runtime knows. Fixed offsets are new; they do not follow daylight saving, and the list says so. A zone saved earlier that the list does not hold is added to it, so opening and saving the form never replaces it.
+- **Zone in the Status**: The status page states the zone in use and where it comes from, the status route reports the same as `timeZoneLabel` and `timeZoneSource`, and the plugin's status line names a followed zone. A value on a followed path that is not a zone is reported on the status page.
+- **Full Changelog Link in Releases**: Each GitHub Release now ends with a link to the comparison with the previous version.
+
+### Changed
+- **Time Zone Setting**: The setting is renamed "Time zone when none is published" and is the fallback when the ship's time is followed. A zone name saved by version 0.1.0 keeps working, and an empty value still means the server's own zone. To keep a fixed zone regardless of what is published, "Time zone for day boundaries" is set to "Always use the time zone chosen below".
+- **State File**: Each period total now records the calendar date of its period and the zone that date was read in, next to the start instant, and the file holds the last zone followed. State written by version 0.1.0 is taken over with its totals, and the file remains readable by 0.1.0.
+- **Release Workflow**: The release action moved to `softprops/action-gh-release@v3`, which runs on Node 24.
+
 ## [0.1.0] - 2026-10-10
 
 ### Added
@@ -20,4 +36,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.2.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Peter-Petrik/signalk-calc-paths/releases/tag/v0.1.0

@@ -10,7 +10,9 @@
  *
  * The check configures three entries through the server's own plugin
  * configuration route, waits for them to publish, and verifies the values,
- * the metadata, the status route, the reset route and the status page.
+ * the metadata, the status route, the reset route and the status page. It
+ * then publishes a time zone on a followed path, the way a ship's time
+ * plugin would, and verifies that the plugin takes it up.
  *
  * This file lives outside test/ on purpose: the Node.js test runner picks up
  * every file under a test directory, and this one needs a server.
@@ -35,6 +37,29 @@ async function getJson (path) {
 async function selfPath (path) {
   const response = await fetch(`${BASE}/signalk/v1/api/vessels/self/${path.replaceAll('.', '/')}`)
   return response.status === 200 ? response.json() : null
+}
+
+/**
+ * Sends one value into the server over its WebSocket stream, as any Signal K
+ * client may. The server hands it to every subscriber like data from a
+ * sensor.
+ */
+function publish (path, value) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`${BASE.replace(/^http/, 'ws')}/signalk/v1/stream?subscribe=none`)
+    const timer = setTimeout(() => reject(new Error(`could not publish ${path}: no connection`)), 10000)
+    socket.addEventListener('error', () => {
+      clearTimeout(timer)
+      reject(new Error(`could not publish ${path}: the stream refused the connection`))
+    })
+    socket.addEventListener('open', () => {
+      socket.send(JSON.stringify({ context: 'vessels.self', updates: [{ $source: 'calc-paths-check', timestamp: new Date().toISOString(), values: [{ path, value }] }] }))
+      // The message is sent before the close handshake completes.
+      socket.close()
+      clearTimeout(timer)
+      resolve()
+    })
+  })
 }
 
 /** Polls until `probe` returns something other than null or undefined. */
@@ -71,7 +96,13 @@ async function main () {
     return node && typeof node.value === 'number' ? node : null
   })
 
+  // The zone is followed on a path of the check's own, so that nothing the
+  // sample data or another plugin publishes can interfere.
+  const ZONE_PATH = 'calcPathsCheck.shipsZone'
   const configuration = {
+    timeZoneSource: 'follow',
+    timeZoneRegionPath: ZONE_PATH,
+    timeZoneOffsetPath: 'calcPathsCheck.shipsOffset',
     timeZone: 'UTC',
     formulas: [{ name: 'Check doubled', inputs: [{ name: 'x', path: INPUT }], expression: 'x * 2', output: 'calcPathsCheck.doubled', unit: 'm/s' }],
     counters: [{ name: 'Check change', input: 'calcPathsCheck.doubled', output: 'calcPathsCheck.change', direction: 'net', resets: 'manual' }],
@@ -108,11 +139,34 @@ async function main () {
     const body = await getJson(`/plugins/${PLUGIN}/api/entries`)
     return body.entries.length === 3 && body.entries.every((e) => e.state === 'ok') ? body : null
   })
+  // Nothing has been published on the followed paths yet, so the zone from
+  // the settings is in use.
   assert.equal(status.timeZone, 'UTC')
+  assert.equal(status.timeZoneSource.kind, 'setting')
+  assert.equal(status.timeZoneSource.follow, true)
   assert.equal(status.clockTrusted, true)
   assert.deepEqual(status.problems, [])
   assert.deepEqual(status.entries.map((e) => e.type), ['formula', 'counter', 'integration'])
   console.log('  status route reports three entries publishing')
+
+  await publish(ZONE_PATH, 'Pacific/Marquesas')
+  const followed = await eventually('the published time zone to be followed', async () => {
+    const body = await getJson(`/plugins/${PLUGIN}/api/entries`)
+    return body.timeZone === 'Pacific/Marquesas' ? body : null
+  })
+  assert.equal(followed.timeZoneSource.kind, 'path')
+  assert.equal(followed.timeZoneSource.path, ZONE_PATH)
+  // An offset published afterwards disagrees with the name and is newer,
+  // so it takes over: -930 is nine and a half hours behind UTC, 300 is
+  // three hours ahead.
+  await publish('calcPathsCheck.shipsOffset', 300)
+  const offset = await eventually('the published offset to be followed', async () => {
+    const body = await getJson(`/plugins/${PLUGIN}/api/entries`)
+    return body.timeZone === '+03:00' ? body : null
+  })
+  assert.equal(offset.timeZoneLabel, 'UTC+03:00')
+  assert.equal(offset.entries.every((e) => e.state === 'ok'), true, 'an entry stopped publishing after the zone changed')
+  console.log('  a time zone published in Signal K is followed')
 
   const reset = await fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent('calcPathsCheck.sum')}/reset`, { method: 'POST' })
   assert.equal(reset.status, 200, `the reset route answered ${reset.status}`)
@@ -120,9 +174,12 @@ async function main () {
   assert.equal(missing.status, 404, 'resetting a formula should answer 404')
   console.log('  reset route works')
 
-  const pluginsAfter = await getJson('/skServer/plugins')
-  const statusMessage = pluginsAfter.find((p) => p.id === PLUGIN).statusMessage
-  assert.match(String(statusMessage), /3 entries: 3 publishing/)
+  // The status line is refreshed once a second, so it is waited for.
+  const statusMessage = await eventually('the plugin status to name the followed zone', async () => {
+    const pluginsAfter = await getJson('/skServer/plugins')
+    const message = String(pluginsAfter.find((p) => p.id === PLUGIN).statusMessage)
+    return /3 entries: 3 publishing\. Time zone UTC\+03:00/.test(message) ? message : null
+  })
   console.log(`  plugin status: ${statusMessage}`)
 
   // Leave the server as it was found.

@@ -11,7 +11,8 @@
  * lib/engine.js. It subscribes to the input paths, feeds each value to the
  * engine with a wall-clock and a monotonic time reading, publishes what the
  * engine hands back, saves the engine's state, and serves the small HTTP
- * interface used by the page under Webapps.
+ * interface used by the page under Webapps. It also reads the paths that
+ * carry the ship's time zone and tells the engine when the zone changes.
  */
 
 const { performance } = require('perf_hooks')
@@ -19,8 +20,9 @@ const { performance } = require('perf_hooks')
 const { normalizeConfig } = require('./lib/config')
 const { Engine } = require('./lib/engine')
 const openApi = require('./lib/openapi')
-const { schema, uiSchema } = require('./lib/schema')
+const { schemaFor, uiSchema } = require('./lib/schema')
 const { loadState, saveState } = require('./lib/state')
+const { ZoneTracker } = require('./lib/timezone')
 const packageInfo = require('./package.json')
 
 const PLUGIN_ID = 'signalk-calc-paths'
@@ -32,21 +34,31 @@ const TICK_MS = 1000
 // at most this much counting; clean stops and resets save immediately.
 const SAVE_INTERVAL_MS = 30000
 
+// How often, in ticks, the followed time zone is looked at again without
+// anything new having been published. See ZoneTracker#recheck().
+const ZONE_RECHECK_TICKS = 60
+
 module.exports = function (app) {
   const plugin = {
     id: PLUGIN_ID,
     name: 'Calculated Paths',
     description: 'Calculate new paths from existing ones: formulas over live values, daily/weekly/monthly/yearly counters on running totals, and integration of a rate over time.',
-    schema,
     uiSchema
   }
 
+  // The time zone chosen in the configuration last started with. See
+  // plugin.schema below.
+  let startedTimeZone
+
   let engine = null
   let normalized = null
+  // Decides which time zone is in use; see lib/timezone.js.
+  let zones = null
   let stateProblem = null
   let unsubscribes = []
   let tickTimer = null
   let lastSaveMono = 0
+  let ticksSinceZoneCheck = 0
   let lastStatus = null
   // True only while the subscription is being set up. See onDelta().
   let subscribing = false
@@ -69,7 +81,7 @@ module.exports = function (app) {
   function save () {
     if (!engine) return
     try {
-      saveState(app.getDataDirPath(), engine.serialize(wallNow()))
+      saveState(app.getDataDirPath(), { ...engine.serialize(wallNow()), zone: zones.serialize() })
       lastSaveMono = monoNow()
     } catch (err) {
       app.error(`Could not save state: ${err.message}`)
@@ -115,6 +127,10 @@ module.exports = function (app) {
       ? 'No entries configured yet'
       : `${total} ${total === 1 ? 'entry' : 'entries'}: ${parts.join(', ')}`
     if (engine.clockSuspect) text += '. System clock looks unset: period resets are paused until it is correct'
+    // Named only when it is followed: a zone that can change by itself is
+    // worth seeing at a glance, a fixed setting is not.
+    const zone = zones.describe()
+    if (zone.source === 'path' || zone.source === 'remembered') text += `. Time zone ${zone.label}`
 
     const firstError = normalized.entries.find((e) => e.error)
     const problem = stateProblem || normalized.problems[0] || (firstError ? `${firstError.label}: ${firstError.error}` : null)
@@ -140,6 +156,14 @@ module.exports = function (app) {
     if (!engine) return
     try {
       flushPending()
+      if (++ticksSinceZoneCheck >= ZONE_RECHECK_TICKS) {
+        ticksSinceZoneCheck = 0
+        const before = zones.zone
+        if (zones.recheck(wallNow())) {
+          engine.setTimeZone(zones.zone)
+          app.debug(`Time zone changed from ${before} to ${zones.zone}: the published name and offset no longer agree`)
+        }
+      }
       const publications = engine.tick(wallNow(), monoNow())
       if (publications.length > 0) {
         app.handleMessage(PLUGIN_ID, {
@@ -147,7 +171,7 @@ module.exports = function (app) {
         })
       }
       reportStatus()
-      if (engine.dirty && monoNow() - lastSaveMono >= SAVE_INTERVAL_MS) save()
+      if ((engine.dirty || zones.dirty) && monoNow() - lastSaveMono >= SAVE_INTERVAL_MS) save()
     } catch (err) {
       app.error(`Calculation pass failed: ${err.stack || err.message}`)
       app.setPluginError(`Calculation pass failed: ${err.message}`)
@@ -163,6 +187,27 @@ module.exports = function (app) {
   function ageOf (timestamp, wall) {
     const stamped = Date.parse(timestamp)
     return Number.isFinite(stamped) ? Math.max(0, wall - stamped) : 0
+  }
+
+  /**
+   * Takes in a value from a path that carries the ship's time zone, and
+   * tells the engine when the zone in use changes as a result. Values on
+   * any other path are ignored here.
+   *
+   * A zone value is acted on at once and is never held back with the input
+   * values: it is not part of a calculation, and the engine only notes the
+   * new zone and applies it on its next pass.
+   *
+   * The value's own time stamp is passed on. The tracker uses it to tell
+   * which of a name and an offset was published later, which the order of
+   * delivery does not say.
+   */
+  function zoneInput (path, value, timestamp) {
+    if (!zones.paths.includes(path)) return
+    const before = zones.zone
+    if (!zones.input(path, value, wallNow(), Date.parse(timestamp))) return
+    engine.setTimeZone(zones.zone)
+    app.debug(`Time zone changed from ${before} to ${zones.zone}, read from ${path}`)
   }
 
   /**
@@ -194,6 +239,9 @@ module.exports = function (app) {
     if (!engine || !delta || !Array.isArray(delta.updates)) return
     for (const update of delta.updates) {
       if (!update || !Array.isArray(update.values)) continue
+      for (const item of update.values) {
+        if (item && typeof item.path === 'string') zoneInput(item.path, item.value, update.timestamp)
+      }
       if (subscribing) {
         const wall = wallNow()
         const mono = monoNow()
@@ -262,24 +310,48 @@ module.exports = function (app) {
     // would publish every value twice.
     plugin.stop()
     normalized = normalizeConfig(options)
+    startedTimeZone = options && typeof options === 'object' ? options.timeZone : undefined
 
     const loaded = loadState(app.getDataDirPath())
     stateProblem = loaded.error
     if (stateProblem) app.error(stateProblem)
 
-    engine = new Engine(normalized, loaded.state)
+    zones = new ZoneTracker(normalized.settings.zone, loaded.state ? loaded.state.zone : null)
+    // The zone the server already holds is read before the engine exists,
+    // so that the engine starts in the right zone and no total sees a
+    // change of zone that is only the plugin catching up.
+    for (const path of zones.paths) {
+      let node
+      try {
+        node = app.getSelfPath(path)
+      } catch (err) {
+        continue
+      }
+      if (node && typeof node === 'object' && 'value' in node) zones.input(path, node.value, wallNow(), Date.parse(node.timestamp))
+    }
+
+    engine = new Engine(normalized, loaded.state, zones.zone)
     lastStatus = null
     lastSaveMono = monoNow()
+    ticksSinceZoneCheck = 0
 
     for (const problem of normalized.problems) app.error(problem)
     for (const entry of normalized.entries) {
       if (entry.error) app.error(`${entry.label}: ${entry.error}`)
     }
-    app.debug(`Starting with ${normalized.entries.length} entries, time zone ${normalized.settings.timeZone}, reading ${engine.externalPaths.length} paths`)
+    const zone = zones.describe()
+    app.debug(`Starting with ${normalized.entries.length} entries, time zone ${zone.label} (${zone.source}), reading ${engine.externalPaths.length} paths`)
 
     publishMetadata()
 
-    if (engine.externalPaths.length > 0) {
+    // The paths that carry the ship's time zone are subscribed to together
+    // with the input paths. They change rarely, and the server passes each
+    // value on as it arrives.
+    const subscribed = [...new Set([...engine.externalPaths, ...zones.paths])]
+    const canSubscribe = app.subscriptionmanager && typeof app.subscriptionmanager.subscribe === 'function'
+    if (subscribed.length > 0 && !canSubscribe) {
+      app.error('The server offers no subscription manager, so no input values can be read.')
+    } else if (subscribed.length > 0) {
       feedCurrentValues(engine.externalPaths)
       // No period or minPeriod is given on purpose: the server then passes
       // every value through as it arrives. An integration needs each value
@@ -290,7 +362,7 @@ module.exports = function (app) {
         app.subscriptionmanager.subscribe(
           {
             context: 'vessels.self',
-            subscribe: engine.externalPaths.map((path) => ({ path }))
+            subscribe: subscribed.map((path) => ({ path }))
           },
           unsubscribes,
           (err) => app.error(`Subscription error: ${err}`),
@@ -321,6 +393,7 @@ module.exports = function (app) {
     if (engine) save()
     engine = null
     normalized = null
+    zones = null
   }
 
   /**
@@ -339,9 +412,21 @@ module.exports = function (app) {
       }
       const settings = normalized.settings
       const pad = (n) => String(n).padStart(2, '0')
+      const zone = zones.describe()
       res.json({
         version: packageInfo.version,
-        timeZone: settings.timeZone,
+        // The zone in use, which may be a followed one and not the setting.
+        timeZone: zone.timeZone,
+        timeZoneLabel: zone.label,
+        timeZoneSource: {
+          kind: zone.source,
+          follow: zone.follow,
+          paths: zone.paths,
+          path: zone.path,
+          since: zone.since,
+          fallback: settings.zone.fallback,
+          problem: zone.problem
+        },
         dayStart: `${pad(Math.floor(settings.dayStartMinutes / 60))}:${pad(settings.dayStartMinutes % 60)}`,
         clockTrusted: !engine.clockSuspect,
         problems: [stateProblem, ...normalized.problems].filter(Boolean),
@@ -371,6 +456,30 @@ module.exports = function (app) {
       router.get('/api/entries', listEntries)
       router.post('/api/entries/:id/reset', resetEntry)
     }
+  }
+
+  /**
+   * The configuration form, built each time the admin UI asks for it.
+   *
+   * The time zone field is a list. The form replaces a saved value that is
+   * not in its list with the default as soon as it is opened, and would then
+   * save "the server's own time zone" over a zone the plugin accepts and
+   * runs with: a name the runtime knows but does not list, or a spelling of
+   * its own. The saved zone is therefore added to the list. It is read from
+   * the saved configuration, so that this also works while the plugin is
+   * disabled, and falls back to the configuration last started with.
+   */
+  plugin.schema = function () {
+    let saved = startedTimeZone
+    try {
+      const stored = app.readPluginOptions()
+      if (stored && stored.configuration && typeof stored.configuration === 'object' && 'timeZone' in stored.configuration) {
+        saved = stored.configuration.timeZone
+      }
+    } catch (err) {
+      // A server without readPluginOptions() leaves the last started value.
+    }
+    return schemaFor(saved)
   }
 
   plugin.getOpenApi = () => openApi(packageInfo.version)

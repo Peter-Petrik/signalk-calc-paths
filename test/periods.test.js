@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict')
 const { test } = require('node:test')
 
-const { isValidTimeZone, nextPeriodStart, parseDayStart, periodStart } = require('../lib/periods')
+const { canonicalTimeZone, isValidTimeZone, nextPeriodInfo, nextPeriodStart, offsetZone, parseDayStart, periodInfo, periodStart, zoneOffset } = require('../lib/periods')
 
 const iso = (instant) => new Date(instant).toISOString()
 const at = (text) => Date.parse(text)
@@ -103,8 +103,7 @@ test('period starts hold their invariants across daylight saving changes', () =>
   // day-start times: the period start is never in the future, asking again
   // from the start gives the same start, and the next period begins after
   // this one, is its own start, and leaves no gap.
-  const { zoneOffset } = require('../lib/periods')
-  const zones = ['UTC', 'Europe/Athens', 'America/New_York', 'America/Havana', 'Australia/Lord_Howe']
+  const zones = ['UTC', 'Europe/Athens', 'America/New_York', 'America/Havana', 'Australia/Lord_Howe', '+05:45', '-09:30']
   const dayStarts = [0, 150, 210, 360, 1410]
   const from = at('2026-01-01T00:00:00Z')
   const to = at('2027-01-01T00:00:00Z')
@@ -135,6 +134,15 @@ test('period starts hold their invariants across daylight saving changes', () =>
           assert.ok(next > instant, `next not after the instant: ${label}`)
           assert.equal(periodStart(next, period, options), next, `next is not a start: ${label}`)
           assert.equal(periodStart(next - 1, period, options), start, `gap before next: ${label}`)
+          // The date key names the period: every instant in it gives the
+          // same key, and the next period's key is later.
+          const key = periodInfo(start, period, options).key
+          assert.match(key, /^\d{4}-\d{2}-\d{2}$/, label)
+          assert.equal(periodInfo(instant, period, options).key, key, `key differs inside the period: ${label}`)
+          assert.equal(periodInfo(next - 1, period, options).key, key, `key changes before the end: ${label}`)
+          const following = nextPeriodInfo(start, period, options)
+          assert.equal(following.start, next, label)
+          assert.ok(following.key > key, `next key is not later: ${label}`)
         }
       }
     }
@@ -175,4 +183,106 @@ test('a skipped hour that runs past midnight never puts a day start in the futur
     assert.ok(start <= instant, iso(instant))
     assert.equal(periodStart(start, 'day', options), start, iso(instant))
   }
+})
+
+test('a fixed offset is a zone with no daylight saving', () => {
+  const options = { timeZone: '+03:00' }
+  // Midnight three hours ahead of UTC is 21:00 UTC the day before, in
+  // summer and in winter alike.
+  assert.equal(iso(periodStart(at('2026-07-10T12:00:00Z'), 'day', options)), '2026-07-09T21:00:00.000Z')
+  assert.equal(iso(periodStart(at('2026-01-10T12:00:00Z'), 'day', options)), '2026-01-09T21:00:00.000Z')
+  // Athens is three hours ahead only in summer.
+  assert.equal(iso(periodStart(at('2026-01-10T12:00:00Z'), 'day', { timeZone: 'Europe/Athens' })), '2026-01-09T22:00:00.000Z')
+  assert.equal(zoneOffset(at('2026-01-10T12:00:00Z'), '+03:00'), 3 * 3600000)
+  assert.equal(zoneOffset(at('2026-01-10T12:00:00Z'), '-09:30'), -9.5 * 3600000)
+})
+
+test('fixed offsets with part hours and a day-start time', () => {
+  // Nepal keeps UTC+05:45: its midnight is 18:15 UTC the day before.
+  assert.equal(iso(periodStart(at('2026-10-10T12:00:00Z'), 'day', { timeZone: '+05:45' })), '2026-10-09T18:15:00.000Z')
+  // The Marquesas keep UTC-09:30: their midnight is 09:30 UTC.
+  assert.equal(iso(periodStart(at('2026-10-10T12:00:00Z'), 'day', { timeZone: '-09:30' })), '2026-10-10T09:30:00.000Z')
+  assert.equal(iso(periodStart(at('2026-10-10T09:29:59Z'), 'day', { timeZone: '-09:30' })), '2026-10-09T09:30:00.000Z')
+  // With the day starting at 04:00, three hours ahead of UTC.
+  assert.equal(iso(periodStart(at('2026-10-10T00:30:00Z'), 'day', { timeZone: '+03:00', dayStartMinutes: 240 })), '2026-10-09T01:00:00.000Z')
+  assert.equal(iso(periodStart(at('2026-10-10T01:00:00Z'), 'day', { timeZone: '+03:00', dayStartMinutes: 240 })), '2026-10-10T01:00:00.000Z')
+  // Weeks, months and years on a fixed offset.
+  assert.equal(iso(periodStart(at('2026-10-10T12:00:00Z'), 'week', { timeZone: '+03:00' })), '2026-10-04T21:00:00.000Z')
+  assert.equal(iso(periodStart(at('2026-10-10T12:00:00Z'), 'month', { timeZone: '+03:00' })), '2026-09-30T21:00:00.000Z')
+  assert.equal(iso(periodStart(at('2026-10-10T12:00:00Z'), 'year', { timeZone: '-09:30' })), '2026-01-01T09:30:00.000Z')
+})
+
+test('a fixed offset gives the same boundaries as a named zone on that offset', () => {
+  // In October Athens is on UTC+03:00, and Etc/GMT-3 always is.
+  for (let instant = at('2026-10-01T00:00:00Z'); instant < at('2026-10-20T00:00:00Z'); instant += 37 * 60000) {
+    for (const period of ['day', 'week', 'month']) {
+      const fixed = periodInfo(instant, period, { timeZone: '+03:00' })
+      assert.deepEqual(fixed, periodInfo(instant, period, { timeZone: 'Europe/Athens' }), `${period} ${iso(instant)}`)
+      assert.deepEqual(fixed, periodInfo(instant, period, { timeZone: 'Etc/GMT-3' }), `${period} ${iso(instant)}`)
+    }
+  }
+})
+
+test('zone names are brought to one spelling', () => {
+  assert.equal(canonicalTimeZone('Europe/Athens'), 'Europe/Athens')
+  assert.equal(canonicalTimeZone('  europe/athens '), 'Europe/Athens')
+  // A name the runtime files under another spelling is kept as given.
+  for (const name of ['Asia/Kathmandu', 'Asia/Katmandu', 'Asia/Kolkata', 'Asia/Calcutta', 'Europe/Kyiv', 'Europe/Kiev']) {
+    const canonical = canonicalTimeZone(name)
+    // Older runtimes do not know every newer name; where a name is known
+    // it comes back unchanged.
+    if (canonical !== null) assert.equal(canonical, name)
+  }
+  for (const utc of ['UTC', 'utc', 'GMT', 'Z', '+00:00', '-0', 'UTC+0']) assert.equal(canonicalTimeZone(utc), 'UTC', utc)
+  for (const three of ['+03:00', '+3', '+03', '+0300', '+300', 'UTC+3', 'utc+03:00', 'GMT+3', 'UTC +3']) assert.equal(canonicalTimeZone(three), '+03:00', three)
+  assert.equal(canonicalTimeZone('-9:30'), '-09:30')
+  assert.equal(canonicalTimeZone('+0545'), '+05:45')
+  assert.equal(canonicalTimeZone('+14'), '+14:00')
+  for (const bad of ['', '   ', 'Atlantis/Central', '+15', '+03:60', '3', '+', 'UTC+', null, undefined, 300, {}]) assert.equal(canonicalTimeZone(bad), null, String(bad))
+})
+
+test('offsets in minutes are written as zone names', () => {
+  assert.equal(offsetZone(180), '+03:00')
+  assert.equal(offsetZone(-570), '-09:30')
+  assert.equal(offsetZone(345), '+05:45')
+  assert.equal(offsetZone(0), 'UTC')
+  assert.equal(offsetZone(840), '+14:00')
+  assert.equal(offsetZone(841), null)
+  assert.equal(offsetZone(1.5), null)
+  assert.equal(offsetZone(NaN), null)
+})
+
+test('a period is named by the calendar date it begins on, whatever the zone', () => {
+  const noon = at('2026-10-10T12:00:00Z')
+  // At noon UTC it is 10 October from Honolulu to Tokyo.
+  for (const timeZone of ['UTC', 'Europe/Athens', 'Europe/Rome', '+03:00', 'Pacific/Honolulu', 'Asia/Tokyo']) {
+    assert.equal(periodInfo(noon, 'day', { timeZone }).key, '2026-10-10', timeZone)
+    assert.equal(periodInfo(noon, 'week', { timeZone }).key, '2026-10-05', timeZone)
+    assert.equal(periodInfo(noon, 'month', { timeZone }).key, '2026-10-01', timeZone)
+    assert.equal(periodInfo(noon, 'year', { timeZone }).key, '2026-01-01', timeZone)
+  }
+  // Half an hour before midnight UTC it is already the 11th in Athens.
+  const late = at('2026-10-10T23:30:00Z')
+  assert.equal(periodInfo(late, 'day', { timeZone: 'UTC' }).key, '2026-10-10')
+  assert.equal(periodInfo(late, 'day', { timeZone: 'Europe/Athens' }).key, '2026-10-11')
+  // With the day starting at 04:00, 02:30 still belongs to the day before.
+  assert.equal(periodInfo(at('2026-10-10T02:30:00Z'), 'day', { timeZone: 'UTC', dayStartMinutes: 240 }).key, '2026-10-09')
+  // A week keyed by its first day follows the configured weekday.
+  assert.equal(periodInfo(noon, 'week', { timeZone: 'UTC', weekStart: 'sunday' }).key, '2026-10-04')
+})
+
+test('the key stays on the right date where a clock change moves the day start', () => {
+  // America/Nuuk skips 23:00 to 00:00 on 28 March 2026. With the day
+  // starting at 23:59, that day's start lands on the next calendar date;
+  // its key must still be the 28th, or the following day would share it.
+  const options = { timeZone: 'America/Nuuk', dayStartMinutes: 23 * 60 + 59 }
+  const keys = new Set()
+  let previous = null
+  for (let instant = at('2026-03-26T12:00:00Z'); instant < at('2026-03-31T12:00:00Z'); instant += 600000) {
+    const { key } = periodInfo(instant, 'day', options)
+    if (previous !== null) assert.ok(key >= previous, iso(instant))
+    previous = key
+    keys.add(key)
+  }
+  assert.deepEqual([...keys], ['2026-03-25', '2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29', '2026-03-30'])
 })

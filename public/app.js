@@ -102,13 +102,52 @@
     }
   }
 
+  /**
+   * Formats an instant as a clock in the plugin's time zone shows it.
+   *
+   * The zone may be a fixed offset, written "+03:00". Browsers differ in
+   * whether they accept that as a zone name, so a fixed offset is applied
+   * here by shifting the instant and formatting the result as UTC.
+   */
   function when (iso) {
     if (!iso) return ''
     const options = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+    const instant = new Date(iso)
+    const fixed = /^([+-])(\d{2}):(\d{2})$/.exec(timeZone || '')
     try {
-      return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(new Date(iso))
+      if (fixed) {
+        const minutes = (Number(fixed[2]) * 60 + Number(fixed[3])) * (fixed[1] === '-' ? -1 : 1)
+        return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).format(new Date(instant.getTime() + minutes * 60000))
+      }
+      return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(instant)
     } catch (err) {
-      return new Intl.DateTimeFormat(undefined, options).format(new Date(iso))
+      return new Intl.DateTimeFormat(undefined, options).format(instant)
+    }
+  }
+
+  /**
+   * Says, in one sentence, which time zone the day boundaries use and why.
+   */
+  function describeZone (data) {
+    const source = data.timeZoneSource
+    const zone = data.timeZoneLabel || data.timeZone
+    const start = `Days begin at ${data.dayStart}, ${zone} time`
+    if (!source) return `${start}.`
+    const waitingFor = source.paths && source.paths.length > 0 ? source.paths.join(' or ') : 'the followed paths'
+    const from = source.path || 'Signal K'
+    switch (source.kind) {
+      case 'path':
+        return `${start}, the ship's time read from ${from}.`
+      case 'remembered':
+        return `${start}, the ship's time last read from ${from}. Nothing has been published there since the plugin started.`
+      case 'setting':
+        return source.follow
+          ? `${start}, the zone chosen in the settings. No ship's time has been published on ${waitingFor}.`
+          : `${start}, the zone chosen in the settings.`
+      default:
+        return source.follow
+          ? `${start}, the server's own time zone. No ship's time has been published on ${waitingFor}.`
+          : `${start}, the server's own time zone.`
     }
   }
 
@@ -285,13 +324,14 @@
 
   function render (data) {
     timeZone = data.timeZone
-    context.textContent = `Days begin at ${data.dayStart}, ${data.timeZone} time.`
+    context.textContent = describeZone(data)
     version.textContent = `signalk-calc-paths ${data.version}`
 
     const messages = []
     if (!data.clockTrusted) {
       messages.push(notice('warning', 'The system clock looks unset. Totals keep counting, and period resets are paused until the clock is correct.'))
     }
+    if (data.timeZoneSource && data.timeZoneSource.problem) messages.push(notice('warning', data.timeZoneSource.problem))
     for (const problem of data.problems) messages.push(notice('error', problem))
     notices.replaceChildren(...messages)
 

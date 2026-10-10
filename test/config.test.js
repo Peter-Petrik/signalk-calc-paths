@@ -5,7 +5,7 @@ const { test } = require('node:test')
 
 const { normalizeConfig } = require('../lib/config')
 const { serverTimeZone } = require('../lib/periods')
-const { schema, uiSchema } = require('../lib/schema')
+const { PART_HOUR_OFFSETS, RENAMED_ZONES, schema, schemaFor, uiSchema } = require('../lib/schema')
 
 const errorsOf = (options) => normalizeConfig(options).entries.map((e) => e.error)
 
@@ -19,13 +19,72 @@ test('an empty or missing configuration is valid and has no entries', () => {
 
 test('settings fall back to defaults', () => {
   const { settings } = normalizeConfig({})
-  assert.deepEqual(settings, { timeZone: serverTimeZone(), dayStartMinutes: 0, weekStart: 'monday', repeatMs: 10000 })
+  assert.deepEqual(settings, {
+    timeZone: serverTimeZone(),
+    zone: {
+      follow: true,
+      regionPath: 'environment.time.timezoneRegion',
+      offsetPath: 'environment.time.timezoneOffset',
+      fallback: serverTimeZone(),
+      fallbackSource: 'server'
+    },
+    dayStartMinutes: 0,
+    weekStart: 'monday',
+    repeatMs: 10000
+  })
 })
 
 test('settings are read from the form values', () => {
   const { settings, problems } = normalizeConfig({ timeZone: ' Europe/Athens ', dayStart: '04:30', weekStart: 'sunday', repeatInterval: 0 })
-  assert.deepEqual(settings, { timeZone: 'Europe/Athens', dayStartMinutes: 270, weekStart: 'sunday', repeatMs: 0 })
+  assert.deepEqual({ ...settings, zone: undefined }, { timeZone: 'Europe/Athens', zone: undefined, dayStartMinutes: 270, weekStart: 'sunday', repeatMs: 0 })
+  assert.equal(settings.zone.fallback, 'Europe/Athens')
+  assert.equal(settings.zone.fallbackSource, 'setting')
   assert.deepEqual(problems, [])
+})
+
+test('the time zone settings are read from the form values', () => {
+  const { settings, problems } = normalizeConfig({ timeZoneSource: 'fixed', timeZoneRegionPath: ' my.zone.name ', timeZoneOffsetPath: 'my.zone.offset', timeZone: '+05:45' })
+  assert.deepEqual(settings.zone, { follow: false, regionPath: 'my.zone.name', offsetPath: 'my.zone.offset', fallback: '+05:45', fallbackSource: 'setting' })
+  assert.equal(settings.timeZone, '+05:45')
+  assert.deepEqual(problems, [])
+})
+
+test('the server\'s zone is the fallback for "server", for nothing, and for the empty text 0.1.0 saved', () => {
+  for (const timeZone of ['server', '', '   ', undefined, null]) {
+    const { settings, problems } = normalizeConfig({ timeZone })
+    assert.equal(settings.zone.fallback, serverTimeZone(), String(timeZone))
+    assert.equal(settings.zone.fallbackSource, 'server', String(timeZone))
+    assert.deepEqual(problems, [])
+  }
+})
+
+test('a zone is accepted in any spelling and stored in one', () => {
+  const fallback = (timeZone) => normalizeConfig({ timeZone }).settings.zone.fallback
+  assert.equal(fallback('europe/athens'), 'Europe/Athens')
+  assert.equal(fallback('UTC+3'), '+03:00')
+  assert.equal(fallback('-0930'), '-09:30')
+  assert.equal(fallback('utc'), 'UTC')
+  assert.equal(fallback('+00:00'), 'UTC')
+})
+
+test('a path to follow that is emptied or malformed goes back to the standard path', () => {
+  for (const empty of [null, undefined, '', '  ']) {
+    const { settings, problems } = normalizeConfig({ timeZoneRegionPath: empty, timeZoneOffsetPath: empty })
+    assert.equal(settings.zone.regionPath, 'environment.time.timezoneRegion')
+    assert.equal(settings.zone.offsetPath, 'environment.time.timezoneOffset')
+    assert.deepEqual(problems, [])
+  }
+  const { settings, problems } = normalizeConfig({ timeZoneRegionPath: 'not a path', timeZoneOffsetPath: 'a..b' })
+  assert.equal(settings.zone.regionPath, 'environment.time.timezoneRegion')
+  assert.equal(settings.zone.offsetPath, 'environment.time.timezoneOffset')
+  assert.equal(problems.length, 2)
+  assert.match(problems[0], /not a path/)
+  assert.match(problems[1], /a\.\.b/)
+})
+
+test('an unknown source for the time zone falls back to following', () => {
+  assert.equal(normalizeConfig({ timeZoneSource: 'sometimes' }).settings.zone.follow, true)
+  assert.equal(normalizeConfig({ timeZoneSource: 'fixed' }).settings.zone.follow, false)
 })
 
 test('a bad time zone or day start is reported and replaced', () => {
@@ -110,7 +169,9 @@ test('the form schema offers every field the configuration reader uses', () => {
   assert.deepEqual(fields('formulas'), ['enabled', 'expression', 'inputs', 'name', 'onStale', 'output', 'staleTimeout', 'unit'])
   assert.deepEqual(fields('counters'), ['direction', 'enabled', 'input', 'minStep', 'name', 'onStale', 'output', 'resetPath', 'resets', 'reversal', 'staleTimeout', 'unit'])
   assert.deepEqual(fields('integrations'), ['enabled', 'gap', 'input', 'mode', 'name', 'onStale', 'output', 'resetPath', 'resets', 'staleTimeout', 'threshold', 'unit'])
-  assert.deepEqual(Object.keys(schema.properties).sort(), ['counters', 'dayStart', 'formulas', 'integrations', 'repeatInterval', 'timeZone', 'weekStart'])
+  assert.deepEqual(Object.keys(schema.properties).sort(), ['counters', 'dayStart', 'formulas', 'integrations', 'repeatInterval', 'timeZone', 'timeZoneOffsetPath', 'timeZoneRegionPath', 'timeZoneSource', 'weekStart'])
+  // Every top-level field has a place in the field order.
+  for (const field of Object.keys(schema.properties)) assert.ok(uiSchema['ui:order'].includes(field), field)
 
   // Every choice list has one label per value, and its default is a value.
   const walk = (node) => {
@@ -149,6 +210,9 @@ test('the schema defaults produce a valid configuration', () => {
   // fields are filled in.
   const defaults = (list) => Object.fromEntries(Object.entries(schema.properties[list].items.properties).filter(([, p]) => 'default' in p).map(([k, p]) => [k, p.default]))
   const { entries, problems } = normalizeConfig({
+    timeZoneSource: schema.properties.timeZoneSource.default,
+    timeZoneRegionPath: schema.properties.timeZoneRegionPath.default,
+    timeZoneOffsetPath: schema.properties.timeZoneOffsetPath.default,
     timeZone: schema.properties.timeZone.default,
     dayStart: schema.properties.dayStart.default,
     weekStart: schema.properties.weekStart.default,
@@ -189,4 +253,74 @@ test('an entry may not follow its own output, or a loop, for resets', () => {
     ]
   })
   for (const entry of entries) assert.match(entry.error, /circular reference/)
+})
+
+test('every choice in the time zone list is a zone the plugin accepts', () => {
+  const { canonicalTimeZone } = require('../lib/periods')
+  const choices = schema.properties.timeZone
+  assert.equal(choices.enum[0], 'server')
+  assert.equal(choices.enum[1], 'UTC')
+  assert.equal(new Set(choices.enum).size, choices.enum.length, 'a zone is listed twice')
+  for (const zone of choices.enum.slice(1)) {
+    const { settings, problems } = normalizeConfig({ timeZone: zone })
+    assert.deepEqual(problems, [], zone)
+    // A choice is saved as written and must come back as the same zone.
+    assert.equal(settings.zone.fallback, canonicalTimeZone(zone), zone)
+    assert.equal(settings.zone.fallbackSource, 'setting', zone)
+  }
+  // The fixed offsets cover every whole hour and the part-hour zones.
+  for (const offset of ['-12:00', '-09:30', '-03:30', '+03:00', '+05:30', '+05:45', '+12:45', '+14:00']) {
+    assert.ok(choices.enum.includes(offset), offset)
+  }
+  assert.ok(choices.enum.includes('Europe/Athens'))
+  // A fixed offset says in its label that it does not follow daylight saving.
+  assert.match(choices.enumNames[choices.enum.indexOf('+03:00')], /^UTC\+03:00 \(fixed, no daylight saving\)$/)
+})
+
+test('the list of fixed offsets covers every offset a zone keeps', () => {
+  // The part-hour offsets are written out in the code. This asks the
+  // runtime, as the code deliberately does not, and fails when a zone keeps
+  // an offset that is in neither the list nor the whole hours.
+  const { zoneOffset } = require('../lib/periods')
+  const year = new Date().getUTCFullYear()
+  const missing = new Set()
+  for (const name of Intl.supportedValuesOf('timeZone')) {
+    for (const month of [0, 6]) {
+      const minutes = zoneOffset(Date.UTC(year, month, 1), name) / 60000
+      if (minutes % 60 !== 0 && !PART_HOUR_OFFSETS.includes(minutes)) missing.add(`${name}: ${minutes}`)
+    }
+  }
+  assert.deepEqual([...missing], [])
+})
+
+test('renamed zones are offered where the runtime accepts them', () => {
+  const { canonicalTimeZone } = require('../lib/periods')
+  const choices = schema.properties.timeZone.enum
+  for (const name of RENAMED_ZONES) {
+    if (canonicalTimeZone(name) === name) assert.ok(choices.includes(name), name)
+  }
+  // The names stay in alphabetical order after the fixed offsets.
+  const names = choices.filter((zone) => zone.includes('/'))
+  assert.deepEqual(names, [...names].sort())
+})
+
+test('the form for a saved zone outside the list holds that zone', () => {
+  // Every spelling the plugin accepts must survive opening and saving the
+  // form, which replaces a value outside its list with the default.
+  for (const saved of ['US/Eastern', 'Etc/UTC', 'europe/athens', 'Etc/GMT-3', 'GMT', 'utc', '+3', 'UTC+05:45']) {
+    const field = schemaFor(saved).properties.timeZone
+    assert.ok(field.enum.includes(saved), saved)
+    assert.equal(field.enumNames.length, field.enum.length, saved)
+    assert.equal(new Set(field.enum).size, field.enum.length, saved)
+    // What the form would save is what the plugin was already running with.
+    assert.equal(normalizeConfig({ timeZone: saved }).problems.length, 0, saved)
+  }
+  // Nothing is added for a zone already listed, or for text that is no zone.
+  const base = schema.properties.timeZone.enum.length
+  for (const saved of ['Europe/Athens', 'UTC', 'server', '+03:00', '', undefined, null, 7, 'Atlantis/Central']) {
+    assert.equal(schemaFor(saved).properties.timeZone.enum.length, base, String(saved))
+  }
+  // The shared schema is never changed by a request.
+  schemaFor('US/Eastern')
+  assert.equal(schema.properties.timeZone.enum.length, base)
 })

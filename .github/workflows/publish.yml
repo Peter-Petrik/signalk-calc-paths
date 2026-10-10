@@ -2,7 +2,8 @@
 # When a tag matching v* (e.g., v1.2.0) is pushed to GitHub,
 # this workflow:
 #   1. Runs the test suite
-#   2. Extracts the matching version entry from CHANGELOG.md
+#   2. Extracts the matching version entry from CHANGELOG.md and adds a
+#      link to the comparison with the previous version's tag
 #   3. Creates a GitHub Release with those notes
 #   4. Publishes the package to the npm registry, unless that version
 #      is already there
@@ -37,8 +38,13 @@ jobs:
       contents: write
 
     steps:
+      # The full history and all tags are fetched so that the previous
+      # version's tag can be found for the "Full changelog" link. The
+      # default is a single commit with no tags.
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # npm's documentation states that Trusted Publishing requires
       # Node 22.14.0 or later and npm 11.5.1 or later.
@@ -97,8 +103,17 @@ jobs:
           # Write to a file to preserve multiline content
           echo "$NOTES" > release_notes.md
 
+          # Add a link to the comparison with the previous version. The
+          # previous version is the nearest v* tag in the history before
+          # the tagged commit. A first release has none, and gets no link.
+          PREVIOUS="$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$PREVIOUS" ]; then
+            echo "" >> release_notes.md
+            echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${GITHUB_REF_NAME}" >> release_notes.md
+          fi
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: release_notes.md
           name: ${{ github.ref_name }}

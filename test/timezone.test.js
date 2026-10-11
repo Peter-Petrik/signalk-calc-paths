@@ -331,3 +331,71 @@ test('a missing or unreadable time stamp counts as now', () => {
   // The offset counts as published a second later, and disagrees.
   assert.equal(tracker.zone, '+02:00')
 })
+
+test('a change of the followed zone is recorded with what it changed from and to', () => {
+  const tracker = new ZoneTracker(settings({ fallback: 'Europe/Rome', fallbackSource: 'setting' }), null)
+  assert.equal(tracker.describe().lastChange, null)
+
+  // The first zone heard replaces the zone from the settings.
+  tracker.input(REGION, 'Europe/Madrid', NOON)
+  assert.deepEqual(tracker.describe().lastChange, { at: '2026-10-10T12:00:00.000Z', from: 'Europe/Rome', to: 'Europe/Madrid', fromPath: null, toPath: REGION })
+
+  // Hearing the same zone again is not a change.
+  tracker.input(REGION, 'Europe/Madrid', NOON + 600000)
+  assert.equal(tracker.describe().lastChange.at, '2026-10-10T12:00:00.000Z')
+
+  // A different name is.
+  tracker.input(REGION, 'Africa/Ceuta', NOON + 3600000)
+  assert.deepEqual(tracker.describe().lastChange, { at: '2026-10-10T13:00:00.000Z', from: 'Europe/Madrid', to: 'Africa/Ceuta', fromPath: REGION, toPath: REGION })
+
+  // So is the same clock time read from the other path: the name is gone
+  // and the offset takes over, which changes how daylight saving is known.
+  tracker.input(REGION, null, NOON + 7200000)
+  tracker.input(OFFSET, 200, NOON + 7200000)
+  assert.deepEqual(tracker.describe().lastChange, { at: '2026-10-10T14:00:00.000Z', from: 'Africa/Ceuta', to: '+02:00', fromPath: REGION, toPath: OFFSET })
+})
+
+test('the record of the last zone change survives a restart and a confirmation', () => {
+  const first = new ZoneTracker(settings(), null)
+  first.input(REGION, 'Europe/Athens', NOON)
+  first.input(REGION, 'Europe/Madrid', NOON + 3600000)
+  const saved = JSON.parse(JSON.stringify(first.serialize()))
+
+  const second = new ZoneTracker(settings(), saved)
+  const expected = { at: '2026-10-10T13:00:00.000Z', from: 'Europe/Athens', to: 'Europe/Madrid', fromPath: REGION, toPath: REGION }
+  assert.deepEqual(second.describe().lastChange, expected)
+  // Reading the remembered zone again after the restart is not a change,
+  // although it does move the time the zone was last heard.
+  second.input(REGION, 'Europe/Madrid', NOON + 7200000)
+  assert.deepEqual(second.describe().lastChange, expected)
+  assert.equal(second.describe().since, '2026-10-10T14:00:00.000Z')
+
+  // A record without the expected form is dropped.
+  const damaged = new ZoneTracker(settings(), { ...saved, lastChange: { at: NOON, from: 'Atlantis/Central', to: 'Europe/Madrid' } })
+  assert.equal(damaged.describe().lastChange, null)
+  // So is one read from other paths than those now followed.
+  const moved = new ZoneTracker(settings({ regionPath: 'custom.zone' }), saved)
+  assert.equal(moved.describe().lastChange, null)
+})
+
+test('an older value from another source is ignored, an older one from the same source is not', () => {
+  const tracker = new ZoneTracker(settings(), null)
+  tracker.input(REGION, 'Europe/Madrid', NOON, NOON, 'ships-time')
+  // Another source's leftover from yesterday.
+  assert.equal(tracker.input(REGION, 'Europe/Athens', NOON + 1000, NOON - 86400000, 'old-plugin'), false)
+  assert.equal(tracker.zone, 'Europe/Madrid')
+  // The same source after its clock was set back two hours.
+  assert.equal(tracker.input(REGION, 'Europe/Athens', NOON + 2000, NOON - 7200000, 'ships-time'), true)
+  assert.equal(tracker.zone, 'Europe/Athens')
+})
+
+test('a time stamp from the future counts as the moment of arrival', () => {
+  const tracker = new ZoneTracker(settings(), null)
+  // Name and offset of one update, stamped five seconds ahead and read
+  // with one clock reading: they stay a pair, and the name is used.
+  tracker.input(OFFSET, 200, NOON, NOON + 5000, 'ships-time')
+  tracker.input(REGION, 'Europe/Madrid', NOON, NOON + 5000, 'ships-time')
+  assert.equal(tracker.zone, 'Europe/Madrid')
+  // A later value is not outranked by the future stamp.
+  assert.equal(tracker.input(REGION, 'Europe/Athens', NOON + 1000, NOON + 1000, 'ships-time'), true)
+})

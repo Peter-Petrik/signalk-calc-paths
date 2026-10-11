@@ -458,7 +458,7 @@ test('with the ship\'s time not followed no time zone path is read', (t) => {
   assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: 'c.total' }])
   const status = statusOf(plugin)
   assert.equal(status.timeZone, 'Europe/Rome')
-  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: false, paths: [], path: null, since: null, fallback: 'Europe/Rome', problem: null })
+  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: false, paths: [], path: null, since: null, lastChange: null, fallback: 'Europe/Rome', problem: null })
   // A zone published later is not acted on either.
   app.send(REGION, 'Europe/Athens')
   assert.equal(statusOf(plugin).timeZone, 'Europe/Rome')
@@ -513,7 +513,7 @@ test('nothing published leaves the zone from the settings in use, and says so', 
   plugin.start({ timeZone: 'Europe/Rome', ...daily })
   const status = statusOf(plugin)
   assert.equal(status.timeZone, 'Europe/Rome')
-  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: true, paths: [REGION, OFFSET], path: null, since: null, fallback: 'Europe/Rome', problem: null })
+  assert.deepEqual(status.timeZoneSource, { kind: 'setting', follow: true, paths: [REGION, OFFSET], path: null, since: null, lastChange: null, fallback: 'Europe/Rome', problem: null })
   // The dashboard line stays as it was: the zone is not a followed one.
   assert.equal(app.statuses.at(-1), '1 entry: 1 waiting for input')
   plugin.stop()
@@ -786,5 +786,307 @@ test('totals saved by version 0.1.0 survive the upgrade when a zone further west
   app.send('c.total', 5100)
   t.mock.timers.tick(1000)
   assert.deepEqual(app.values(), { 'c.day': 1100, 'c.week': 1100, 'c.month': 1100, 'c.year': 1100 })
+  plugin.stop()
+})
+
+test('a saved total is shown and published straight after a restart with silent inputs', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-10T20:01:00Z') })
+  const settings = {
+    timeZone: 'UTC',
+    counters: [{ name: 'Engine hours today', input: 'e.runTime', output: 'e.today', unit: 's', onStale: 'hold' }],
+    integrations: [{ name: 'Fuel today', input: 'e.rate', output: 'e.used', unit: 'm3' }]
+  }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  app.send('e.runTime', 1000)
+  app.send('e.rate', 2)
+  t.mock.timers.tick(10000)
+  app.send('e.runTime', 4600)
+  app.send('e.rate', 2)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['e.today'], 3600)
+  plugin.stop()
+
+  // The server restarts and holds nothing; the engine stays switched off.
+  app.messages.length = 0
+  t.mock.timers.tick(600000)
+  plugin.start(settings)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['e.today'], 3600)
+  assert.equal(app.values()['e.used'], undefined)
+  const status = statusOf(plugin)
+  const [hours, fuel] = status.entries
+  assert.equal(hours.state, 'stale')
+  assert.equal(hours.value, 3600)
+  assert.match(hours.message, /still publishing the saved total/)
+  assert.equal(fuel.state, 'stale')
+  // The monotonic clock is not under the test's control, so only the
+  // presence of the saved total is checked here; its size is covered by
+  // the engine tests.
+  assert.equal(typeof fuel.value, 'number')
+  assert.match(fuel.message, /publishing is paused/)
+  assert.equal(app.statuses.at(-1), '2 entries: 2 stale')
+  plugin.stop()
+})
+
+test('the status says when the plugin started and why a total was last cleared', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-10T20:00:00Z') })
+  const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'path', resetPath: 'ref.today', staleTimeout: 0 }] }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  assert.equal(statusOf(plugin).startedAt, '2026-10-10T20:00:00.000Z')
+  app.send('ref.today', 1540)
+  app.send('m.total', 1000)
+  t.mock.timers.tick(5000)
+  assert.equal(statusOf(plugin).entries[0].lastReset, null)
+  app.send('ref.today', 0)
+  t.mock.timers.tick(1000)
+  // The stand-in sends every value with the source "test".
+  assert.deepEqual(statusOf(plugin).entries[0].lastReset, { at: '2026-10-10T20:00:05.000Z', cause: 'path', path: 'ref.today', from: 1540, to: 0, source: 'test' })
+
+  // The record is saved with the total and is there after a restart.
+  plugin.stop()
+  t.mock.timers.tick(60000)
+  plugin.start(settings)
+  const status = statusOf(plugin)
+  assert.equal(status.startedAt, '2026-10-10T20:01:06.000Z')
+  assert.equal(status.entries[0].lastReset.source, 'test')
+  plugin.stop()
+})
+
+test('a value the server held at start-up carries its source into the reset record', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-10T20:00:00Z') })
+  const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'path', resetPath: 'ref.today', staleTimeout: 0 }] }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  app.send('ref.today', 1540)
+  app.send('m.total', 1000)
+  t.mock.timers.tick(1000)
+  plugin.stop()
+
+  // While the plugin is stopped the followed path falls. The server holds
+  // the new value and hands it over when the plugin subscribes again.
+  app.replay = [{ context: 'vessels.self', updates: [{ $source: 'victron.center', timestamp: '2026-10-10T20:00:30.000Z', values: [{ path: 'ref.today', value: 0 }] }] }]
+  t.mock.timers.tick(60000)
+  plugin.start(settings)
+  const record = statusOf(plugin).entries[0].lastReset
+  assert.equal(record.cause, 'path')
+  assert.equal(record.source, 'victron.center')
+  assert.equal(record.at, '2026-10-10T20:01:01.000Z')
+  plugin.stop()
+})
+
+test('of the values the server holds for a path at start-up only one is taken', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const settings = {
+    timeZone: 'UTC',
+    counters: [
+      { input: 'm.total', output: 'm.today', resets: 'path', resetPath: 'ref.today', staleTimeout: 0 },
+      { input: 'ref.today', output: 'ref.change', resets: 'manual', staleTimeout: 0 }
+    ]
+  }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  app.send('ref.today', 0)
+  app.send('m.total', 1000)
+  app.send('m.total', 5150)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['m.today'], 4150)
+  plugin.stop()
+
+  // The server still holds 1540 from a source name the device no longer
+  // uses, next to the current 0. It replays both, oldest first.
+  const delta = ($source, timestamp, value) => ({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 'ref.today', value }] }] })
+  app.replay = [delta('victron.oldname', '2026-10-10T20:55:00.000Z', 1540), delta('victron.newname', '2026-10-11T07:59:59.000Z', 0)]
+  t.mock.timers.tick(5000)
+  plugin.start(settings)
+  t.mock.timers.tick(1000)
+  const [today, change] = statusOf(plugin).entries
+  // The total is not cleared by a fall that never happened ...
+  assert.equal(today.value, 4150)
+  assert.equal(today.lastReset, null)
+  // ... and a counter on that path does not count the old value as a change.
+  assert.equal(change.value, 0)
+  plugin.stop()
+
+  // The same holds when the newest value is the one read directly.
+  const direct = fakeApp({ 'ref.today': { value: 0, timestamp: '2026-10-11T07:59:59.000Z', $source: 'victron.newname' } })
+  direct.dataDir = app.dataDir
+  direct.replay = [delta('victron.oldname', '2026-10-10T20:55:00.000Z', 1540)]
+  const again = createPlugin(direct)
+  again.start(settings)
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(again).entries[0].value, 4150)
+  assert.equal(statusOf(again).entries[0].lastReset, null)
+  assert.equal(statusOf(again).entries[1].value, 0)
+  again.stop()
+})
+
+test('an old value handed over while running is ignored and counted', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'path', resetPath: 'ref.today', staleTimeout: 0 }] }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  const push = ($source, timestamp, path, value) => {
+    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
+  }
+  push('victron.newname', '2026-10-11T08:00:00.000Z', 'ref.today', 0)
+  app.send('m.total', 1000)
+  app.send('m.total', 3000)
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(plugin).outdatedValues.count, 0)
+
+  // The server passes on a value it held from the old source name.
+  push('victron.oldname', '2026-10-10T20:55:00.000Z', 'ref.today', 1540)
+  push('victron.newname', '2026-10-11T08:00:02.000Z', 'ref.today', 0)
+  t.mock.timers.tick(1000)
+  let status = statusOf(plugin)
+  assert.equal(status.entries[0].value, 2000)
+  assert.equal(status.entries[0].lastReset, null)
+  assert.equal(status.outdatedValues.count, 1)
+  assert.deepEqual(status.outdatedValues.last, { path: 'ref.today', source: 'victron.oldname', timestamp: '2026-10-10T20:55:00.000Z', at: '2026-10-11T08:00:01.000Z' })
+
+  // A source whose own time stamps run backwards is still read: a log
+  // that is played again starts over at its first time stamp.
+  push('victron.newname', '2026-10-11T07:00:00.000Z', 'ref.today', 5)
+  push('victron.newname', '2026-10-11T07:00:01.000Z', 'ref.today', 0)
+  t.mock.timers.tick(1000)
+  status = statusOf(plugin)
+  assert.equal(status.outdatedValues.count, 1)
+  assert.equal(status.entries[0].lastReset.cause, 'path')
+  assert.equal(status.entries[0].lastReset.from, 5)
+
+  // A newer value from another source is taken as before.
+  push('other.source', '2026-10-11T08:00:05.000Z', 'ref.today', 7)
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(plugin).outdatedValues.count, 1)
+  plugin.stop()
+})
+
+test('a time stamp from the future cannot make a path deaf', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'manual', staleTimeout: 0 }] }
+  const push = (app, $source, timestamp, path, value) => {
+    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
+  }
+
+  // Held at start-up: a value stamped a day ahead by a source that then
+  // says nothing more. The live source's values must still be counted.
+  const held = fakeApp({ 'm.total': { value: 100, timestamp: '2026-10-12T08:00:00.000Z', $source: 'clock.ahead' } })
+  const first = createPlugin(held)
+  first.start(settings)
+  for (let i = 1; i <= 5; i++) {
+    t.mock.timers.tick(1000)
+    push(held, 'clock.right', new Date().toISOString(), 'm.total', 100 + i)
+  }
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(first).entries[0].value, 5)
+  assert.equal(statusOf(first).outdatedValues.count, 0)
+  first.stop()
+
+  // The same while running: one value stamped an hour ahead, then silence.
+  const live = fakeApp()
+  const second = createPlugin(live)
+  second.start(settings)
+  push(live, 'clock.ahead', '2026-10-11T09:00:10.000Z', 'm.total', 100)
+  for (let i = 1; i <= 5; i++) {
+    t.mock.timers.tick(1000)
+    push(live, 'clock.right', new Date().toISOString(), 'm.total', 100 + i)
+  }
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(second).entries[0].value, 5)
+  assert.equal(statusOf(second).outdatedValues.count, 0)
+  second.stop()
+})
+
+test('a source whose clock runs behind loses its first value only', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'manual', staleTimeout: 0 }] }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  const push = ($source, timestamp, value) => {
+    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 'm.total', value }] }] })
+  }
+  push('server.clock', '2026-10-11T08:00:00.000Z', 100)
+  // A second source takes over; its own clock is ten minutes behind.
+  push('device.clock', '2026-10-11T07:50:01.000Z', 101)
+  push('device.clock', '2026-10-11T07:50:02.000Z', 102)
+  push('device.clock', '2026-10-11T07:50:03.000Z', 103)
+  t.mock.timers.tick(1000)
+  let status = statusOf(plugin)
+  assert.equal(status.entries[0].value, 3)
+  assert.equal(status.outdatedValues.count, 1)
+
+  // A held value handed over again and again never moves, and stays out.
+  push('old.name', '2026-10-10T20:00:00.000Z', 5000)
+  push('old.name', '2026-10-10T20:00:00.000Z', 5000)
+  push('device.clock', '2026-10-11T07:50:04.000Z', 104)
+  t.mock.timers.tick(1000)
+  status = statusOf(plugin)
+  assert.equal(status.entries[0].value, 4)
+  assert.equal(status.outdatedValues.count, 3)
+  plugin.stop()
+})
+
+test('an old value on a time zone path changes neither the zone nor its record', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const delta = ($source, timestamp, value) => ({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: REGION, value }] }] })
+
+  // While running: the server passes on what an old source last said.
+  const app = fakeApp({ [REGION]: { value: 'Europe/Madrid', timestamp: '2026-10-11T07:00:00.000Z' } })
+  const plugin = createPlugin(app)
+  plugin.start(daily)
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Madrid')
+  const before = statusOf(plugin).timeZoneSource.lastChange
+  for (const { callback } of app.subscriptions) callback(delta('old.name', '2026-10-09T10:00:00.000Z', 'Europe/Athens'))
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(plugin).timeZone, 'Europe/Madrid')
+  assert.deepEqual(statusOf(plugin).timeZoneSource.lastChange, before)
+  plugin.stop()
+
+  // At start-up, whichever order the held values arrive in.
+  for (const order of ['oldest first', 'newest first']) {
+    const replay = [delta('old.name', '2026-10-09T10:00:00.000Z', 'Europe/Athens'), delta('new.name', '2026-10-11T07:00:00.000Z', 'Europe/Madrid')]
+    const again = fakeApp()
+    again.dataDir = app.dataDir
+    again.replay = order === 'oldest first' ? replay : replay.reverse()
+    const restarted = createPlugin(again)
+    t.mock.timers.tick(60000)
+    restarted.start(daily)
+    assert.equal(statusOf(restarted).timeZone, 'Europe/Madrid', order)
+    assert.deepEqual(statusOf(restarted).timeZoneSource.lastChange, before, order)
+    restarted.stop()
+  }
+})
+
+test('a source seen before is read again when it sends something new, whatever its clock says', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
+  const settings = { timeZone: 'UTC', integrations: [{ input: 's.state', output: 's.onTime', mode: 'time', threshold: 0, resets: 'manual', staleTimeout: 0 }] }
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(settings)
+  const push = ($source, timestamp, value) => {
+    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 's.state', value }] }] })
+  }
+  push('a', '2026-10-11T08:00:00.000Z', false)
+  push('b', '2026-10-11T08:00:00.500Z', false)
+  // Source a restarts with its clock at the year 2000 and reports the
+  // switch going on, once. That is news, not an old value.
+  push('a', '2000-01-01T00:00:05.000Z', true)
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(plugin).outdatedValues.count, 0)
+  assert.ok(statusOf(plugin).entries[0].value >= 0)
+  // The same value with the same stamp, handed over again while b is the
+  // source being read, is an old value.
+  push('b', '2026-10-11T08:00:02.000Z', true)
+  push('a', '2000-01-01T00:00:05.000Z', true)
+  t.mock.timers.tick(1000)
+  assert.equal(statusOf(plugin).outdatedValues.count, 1)
   plugin.stop()
 })

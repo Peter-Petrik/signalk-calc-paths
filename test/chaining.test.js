@@ -309,16 +309,17 @@ test('a stale entry that keeps publishing still passes a rollover downstream', (
   assert.equal(h.value('m.todayWh'), 0)
 })
 
-test('a restored counter that has seen no input yet feeds nothing downstream', () => {
+test('a restored counter that has seen no input yet feeds nothing downstream while it is not publishing', () => {
   const options = {
-    counters: [{ input: 'm.total', output: 'm.today', staleTimeout: 0 }],
+    counters: [{ input: 'm.total', output: 'm.today' }],
     formulas: [{ inputs: [{ name: 't', path: 'm.today' }, { name: 'o', path: 'o.x' }], expression: 't + o', output: 'm.sum', staleTimeout: 0 }]
   }
   const first = harness(options)
   first.input(0, 'm.total', 100)
   first.input(10, 'm.total', 150)
   const saved = first.save(10)
-  // Restart the next morning. The other input arrives; the counter's has not.
+  // Restart the next morning. The other input arrives; the counter's has
+  // not, and the counter is set to stop publishing without a fresh input.
   const h = harness(options, saved, NOON + 18 * 3600000)
   h.tick(0)
   h.input(1, 'o.x', 7)
@@ -327,6 +328,42 @@ test('a restored counter that has seen no input yet feeds nothing downstream', (
   h.input(2, 'm.total', 160)
   h.tick(2)
   assert.equal(h.value('m.sum'), 17)
+})
+
+test('a restored counter that is publishing passes its total on before its input returns', () => {
+  // With a stale timeout of zero an entry never counts as stale, so its
+  // saved total is published, and read downstream, from the start.
+  const options = {
+    counters: [{ input: 'm.total', output: 'm.today', staleTimeout: 0 }],
+    formulas: [{ inputs: [{ name: 't', path: 'm.today' }, { name: 'o', path: 'o.x' }], expression: 't + o', output: 'm.sum', staleTimeout: 0 }]
+  }
+  const first = harness(options)
+  first.input(0, 'm.total', 100)
+  first.input(10, 'm.total', 150)
+  const saved = first.save(10)
+
+  // Restarted an hour later, the same day: the saved 50 goes out.
+  const sameDay = harness(options, saved, NOON + 3600000)
+  assert.deepEqual(sameDay.tick(0), [{ path: 'm.today', value: 50 }])
+  assert.equal(sameDay.state('m.today', 0).state, 'ok')
+  assert.match(sameDay.state('m.today', 0).message, /since the plugin started; publishing the saved total/)
+  sameDay.input(1, 'o.x', 7)
+  sameDay.tick(1)
+  assert.equal(sameDay.value('m.sum'), 57)
+
+  // Restarted the next morning: the day began while the plugin was down,
+  // so the total goes out cleared, and the status says both things.
+  const nextDay = harness(options, saved, NOON + 18 * 3600000)
+  assert.deepEqual(nextDay.tick(0), [{ path: 'm.today', value: 0 }])
+  const state = nextDay.state('m.today', 0)
+  assert.match(state.message, /publishing the total, cleared since\. A period began while the plugin was not running/)
+  nextDay.input(1, 'o.x', 7)
+  nextDay.tick(1)
+  assert.equal(nextDay.value('m.sum'), 7)
+  // What the source counted during the downtime arrives with its first value.
+  nextDay.input(2, 'm.total', 160)
+  nextDay.tick(2)
+  assert.equal(nextDay.value('m.sum'), 17)
 })
 
 test('pointing an entry at a different path to follow does not clear its total', () => {

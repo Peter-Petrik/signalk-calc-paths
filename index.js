@@ -60,6 +60,9 @@ module.exports = function (app) {
   let lastSaveMono = 0
   let ticksSinceZoneCheck = 0
   let lastStatus = null
+  // When the plugin last started, for the status page: a start that nobody
+  // asked for is otherwise indistinguishable from one that never happened.
+  let startedAt = null
   // True only while the subscription is being set up. See onDelta().
   let subscribing = false
   // Values received in the current turn of the event loop, waiting to be
@@ -67,6 +70,17 @@ module.exports = function (app) {
   let pending = []
   let pendingWall = 0
   let pendingMono = 0
+  // The values the server already held when the plugin started, newest per
+  // path. See onDelta() and feedHeldValues().
+  let held = new Map()
+  // The same for the paths that carry the ship's time zone.
+  let heldZones = new Map()
+  // The time stamp and source of the value last taken in for each path,
+  // the last time stamp and value seen from each source of each path, and
+  // a count of the values turned away as old ones. See isOutdated().
+  let latest = new Map()
+  let seenBySource = new Map()
+  let outdated = { count: 0, last: null }
 
   // Both clocks are read through these two functions so that every value
   // and every tick is stamped the same way.
@@ -202,10 +216,10 @@ module.exports = function (app) {
    * which of a name and an offset was published later, which the order of
    * delivery does not say.
    */
-  function zoneInput (path, value, timestamp) {
+  function zoneInput (path, value, timestamp, source, wall = wallNow()) {
     if (!zones.paths.includes(path)) return
     const before = zones.zone
-    if (!zones.input(path, value, wallNow(), Date.parse(timestamp))) return
+    if (!zones.input(path, value, wall, Date.parse(timestamp), source)) return
     engine.setTimeZone(zones.zone)
     app.debug(`Time zone changed from ${before} to ${zones.zone}, read from ${path}`)
   }
@@ -228,28 +242,40 @@ module.exports = function (app) {
    *
    * When a subscription is made, the server first replays the values it
    * already holds, synchronously, before subscribe() returns. Those are not
-   * fresh: a switch state may be hours old. While `subscribing` is set each
-   * update is therefore fed at once and with its real age, taken from its
-   * timestamp, so the stale timeout judges it correctly, and with the
-   * present moment as the point from which an integration may start adding
-   * up. Live values are stamped on arrival instead, because a sensor's own
-   * clock cannot be relied on for measuring durations.
+   * fresh: a switch state may be hours old. And there may be several for
+   * one path: the server keeps the last value of every source that ever
+   * wrote to it, so a device that once appeared under another source name
+   * leaves that name's last value behind. While `subscribing` is set the
+   * values are therefore only collected; feedHeldValues() then hands over
+   * the newest one per path. Live values are stamped on arrival, because a
+   * sensor's own clock cannot be relied on for measuring durations.
    */
   function onDelta (delta) {
     if (!engine || !delta || !Array.isArray(delta.updates)) return
     for (const update of delta.updates) {
       if (!update || !Array.isArray(update.values)) continue
-      for (const item of update.values) {
-        if (item && typeof item.path === 'string') zoneInput(item.path, item.value, update.timestamp)
-      }
+      // The source is passed along so that a reset record can name it, and
+      // to tell a source's own values from another source's.
+      const source = typeof update.$source === 'string' ? update.$source : undefined
+      // The clock is read once for the whole update. Time stamps from the
+      // future are cut back to it, and the values of one update must come
+      // out with equal time stamps: the zone tracker reads a name and an
+      // offset with equal stamps as belonging together.
+      const wall = wallNow()
       if (subscribing) {
-        const wall = wallNow()
-        const mono = monoNow()
-        engine.inputs(update.values, wall, mono - ageOf(update.timestamp, wall), mono)
+        for (const item of update.values) {
+          if (!item || typeof item.path !== 'string') continue
+          collectHeld(item.path, item.value, update.timestamp, source, false, wall)
+          collectHeldZone(item.path, item.value, update.timestamp, source, wall)
+        }
         continue
       }
       for (const item of update.values) {
+        if (item && typeof item.path === 'string') zoneInput(item.path, item.value, update.timestamp, source, wall)
+      }
+      for (const item of update.values) {
         if (!item || typeof item.path !== 'string') continue
+        if (isOutdated(item.path, update.timestamp, source, item.value, wall)) continue
         // A second value for a path that is already waiting is a new
         // reading, not part of the same step: what is waiting goes first.
         if (pending.some((waiting) => waiting.path === item.path)) flushPending()
@@ -258,7 +284,7 @@ module.exports = function (app) {
           pendingMono = monoNow()
           queueMicrotask(flushPending)
         }
-        pending.push({ path: item.path, value: item.value })
+        pending.push({ path: item.path, value: item.value, source })
       }
     }
   }
@@ -278,18 +304,60 @@ module.exports = function (app) {
   }
 
   /**
-   * Feeds the engine the values the server already holds.
+   * Reads a time stamp for comparing values with each other. One that is
+   * missing or unreadable counts as now, as in ageOf(). So does one from
+   * the future: a source with a clock that runs ahead must not outrank
+   * every value that arrives after it.
+   */
+  function stampOf (timestamp, wall) {
+    const parsed = Date.parse(timestamp)
+    return Number.isFinite(parsed) ? Math.min(parsed, wall) : wall
+  }
+
+  /**
+   * Notes a value the server already held at start-up, keeping one per
+   * path.
+   *
+   * The value read directly from the server (`direct`) is the one the
+   * server itself reports for the path at this moment, and is kept in
+   * preference to anything replayed. Among replayed values the newest time
+   * stamp wins. That is the best available guess and can be wrong where
+   * two sources of one path stamp their values by different clocks.
+   */
+  function collectHeld (path, value, timestamp, source, direct = false, wall = wallNow()) {
+    if (!engine || !engine.external.has(path)) return
+    const stamp = stampOf(timestamp, wall)
+    // Every held value is remembered, also those not used, so that one
+    // handed over again later is recognised; see isOutdated().
+    noteSeen(path, source, stamp, value)
+    const known = held.get(path)
+    if (known && known.direct && !direct) return
+    if (!known || direct || stamp >= known.stamp) held.set(path, { value, stamp, source, direct })
+  }
+
+  /**
+   * Notes a held value of a path that carries the ship's time zone, newest
+   * per path. Applied one after the other, an old source's last value and
+   * the current one would be recorded as a change of zone at every start.
+   */
+  function collectHeldZone (path, value, timestamp, source, wall = wallNow()) {
+    if (!zones || !zones.paths.includes(path)) return
+    const stamp = stampOf(timestamp, wall)
+    const known = heldZones.get(path)
+    if (!known || stamp >= known.stamp) heldZones.set(path, { value, timestamp, stamp, source })
+  }
+
+  /**
+   * Reads the values the server holds for the input paths.
    *
    * An input that is sent rarely, such as a switch state, would otherwise
    * leave its entries waiting, possibly for hours. Signal K server 2.33
    * replays held values when a subscription is made (see onDelta), which
    * covers the same need; this direct read makes the plugin independent of
-   * that behaviour. A value that arrives both ways is simply seen twice,
-   * which changes nothing.
+   * that behaviour. A value found both ways is kept once.
    */
-  function feedCurrentValues (paths) {
+  function collectCurrentValues (paths) {
     const wall = wallNow()
-    const mono = monoNow()
     for (const path of paths) {
       let node
       try {
@@ -298,10 +366,96 @@ module.exports = function (app) {
         continue
       }
       if (!node || typeof node !== 'object' || !('value' in node)) continue
-      // The wall time stays "now": it decides which period the value falls
-      // in, and an old value must not reopen yesterday's period.
-      engine.input(path, node.value, wall, mono - ageOf(node.timestamp, wall), mono)
+      collectHeld(path, node.value, node.timestamp, typeof node.$source === 'string' ? node.$source : undefined, true, wall)
     }
+  }
+
+  /**
+   * Hands the engine the newest held value of each path.
+   *
+   * Only one value per path counts. Fed one after the other, an old source
+   * name's last value followed by the current one would look like a change
+   * that never happened: a counter would add the difference, and a total
+   * that resets when a path falls would be cleared at every start.
+   *
+   * Each value goes in with its real age, taken from its time stamp, so
+   * that the stale timeout judges it correctly, and with the present moment
+   * as the point from which an integration may start adding up. The wall
+   * time stays "now": it decides which period the value falls in, and an
+   * old value must not reopen yesterday's period. Values that came in one
+   * update are handed over together, oldest update first.
+   */
+  function feedHeldValues () {
+    const wall = wallNow()
+    const mono = monoNow()
+    const updates = new Map()
+    for (const [path, item] of held) {
+      const key = `${item.stamp}|${item.source || ''}`
+      if (!updates.has(key)) updates.set(key, { stamp: item.stamp, values: [] })
+      updates.get(key).values.push({ path, value: item.value, source: item.source })
+      latest.set(path, { stamp: item.stamp, source: item.source })
+    }
+    held = new Map()
+    for (const [path, item] of heldZones) zoneInput(path, item.value, item.timestamp, item.source, wall)
+    heldZones = new Map()
+    for (const update of [...updates.values()].sort((a, b) => a.stamp - b.stamp)) {
+      engine.inputs(update.values, wall, mono - Math.max(0, wall - update.stamp), mono)
+    }
+  }
+
+  /** Remembers the last time stamp and value seen from one source of one path. */
+  function noteSeen (path, source, stamp, value) {
+    if (!seenBySource.has(path)) seenBySource.set(path, new Map())
+    seenBySource.get(path).set(source || '', { stamp, value })
+  }
+
+  /**
+   * Whether a live value is an old one handed over again, and not a new
+   * reading.
+   *
+   * The server keeps the last value of every source that ever wrote to a
+   * path, with the time stamp it arrived with, and can pass such a value on
+   * long after the source has gone quiet. Taken as a new reading it would
+   * undo the current one for a moment: a period counter would add the
+   * difference, and a total that resets when a path falls would be cleared.
+   *
+   * Time stamps of different sources need not share a clock, so "older
+   * than the current value" alone proves little. What marks a held value
+   * is that it does not move: handed over again it carries the same time
+   * stamp and the same value. Two rules follow, and both apply only to a
+   * source other than the one last read:
+   *
+   * 1. A value from a source seen before on this path is turned away only
+   *    when it repeats exactly what that source sent last. Anything else
+   *    from it is a new reading, whatever its clock says: the clock may run
+   *    behind, or may have been set back.
+   * 2. A value from a source not seen before is turned away when it is
+   *    older than the value last read. This is the one case that rests on
+   *    comparing two clocks.
+   *
+   * Every value the server held at start-up counts as seen, so an old
+   * source name's leftover falls under the first rule from the beginning.
+   * Values of the source last read are never turned away, so a recorded
+   * log that is played again from its beginning is still read.
+   */
+  function isOutdated (path, timestamp, source, value, wall) {
+    if (!engine.external.has(path)) return false
+    const parsed = Date.parse(timestamp)
+    if (!Number.isFinite(parsed)) return false
+    const stamp = Math.min(parsed, wall)
+    const known = latest.get(path)
+    const sources = seenBySource.get(path)
+    const before = sources ? sources.get(source || '') : undefined
+    noteSeen(path, source, stamp, value)
+    const repeated = before !== undefined && before.stamp === stamp && Object.is(before.value, value)
+    if (known && source !== known.source && (before !== undefined ? repeated : stamp < known.stamp)) {
+      outdated.count++
+      outdated.last = { path, source: source || null, timestamp: new Date(stamp).toISOString(), at: new Date(wall).toISOString() }
+      app.debug(`Ignored a value on ${path} from ${source || 'an unnamed source'} stamped ${outdated.last.timestamp}: an old value handed over again while ${known.source || 'an unnamed source'} is being read`)
+      return true
+    }
+    latest.set(path, { stamp, source })
+    return false
   }
 
   plugin.start = function (options) {
@@ -310,6 +464,7 @@ module.exports = function (app) {
     // would publish every value twice.
     plugin.stop()
     normalized = normalizeConfig(options)
+    startedAt = wallNow()
     startedTimeZone = options && typeof options === 'object' ? options.timeZone : undefined
 
     const loaded = loadState(app.getDataDirPath())
@@ -320,6 +475,7 @@ module.exports = function (app) {
     // The zone the server already holds is read before the engine exists,
     // so that the engine starts in the right zone and no total sees a
     // change of zone that is only the plugin catching up.
+    const zoneWall = wallNow()
     for (const path of zones.paths) {
       let node
       try {
@@ -327,10 +483,17 @@ module.exports = function (app) {
       } catch (err) {
         continue
       }
-      if (node && typeof node === 'object' && 'value' in node) zones.input(path, node.value, wallNow(), Date.parse(node.timestamp))
+      if (node && typeof node === 'object' && 'value' in node) {
+        zones.input(path, node.value, zoneWall, Date.parse(node.timestamp), typeof node.$source === 'string' ? node.$source : undefined)
+      }
     }
 
     engine = new Engine(normalized, loaded.state, zones.zone)
+    held = new Map()
+    heldZones = new Map()
+    latest = new Map()
+    seenBySource = new Map()
+    outdated = { count: 0, last: null }
     lastStatus = null
     lastSaveMono = monoNow()
     ticksSinceZoneCheck = 0
@@ -352,7 +515,7 @@ module.exports = function (app) {
     if (subscribed.length > 0 && !canSubscribe) {
       app.error('The server offers no subscription manager, so no input values can be read.')
     } else if (subscribed.length > 0) {
-      feedCurrentValues(engine.externalPaths)
+      collectCurrentValues(engine.externalPaths)
       // No period or minPeriod is given on purpose: the server then passes
       // every value through as it arrives. An integration needs each value
       // at its own time, and a subscription with a period would hand them
@@ -371,8 +534,13 @@ module.exports = function (app) {
       } finally {
         subscribing = false
       }
+      feedHeldValues()
     }
 
+    // One pass at once, not a second from now: period boundaries that
+    // passed while the plugin was stopped are applied before anyone reads
+    // the status, and saved totals that are to be published go out.
+    tick()
     tickTimer = setInterval(tick, TICK_MS)
     reportStatus()
   }
@@ -415,6 +583,7 @@ module.exports = function (app) {
       const zone = zones.describe()
       res.json({
         version: packageInfo.version,
+        startedAt: new Date(startedAt).toISOString(),
         // The zone in use, which may be a followed one and not the setting.
         timeZone: zone.timeZone,
         timeZoneLabel: zone.label,
@@ -424,11 +593,14 @@ module.exports = function (app) {
           paths: zone.paths,
           path: zone.path,
           since: zone.since,
+          lastChange: zone.lastChange,
           fallback: settings.zone.fallback,
           problem: zone.problem
         },
         dayStart: `${pad(Math.floor(settings.dayStartMinutes / 60))}:${pad(settings.dayStartMinutes % 60)}`,
         clockTrusted: !engine.clockSuspect,
+        // Values turned away since the plugin started; see isOutdated().
+        outdatedValues: { count: outdated.count, last: outdated.last },
         problems: [stateProblem, ...normalized.problems].filter(Boolean),
         entries: engine.snapshot(wallNow(), monoNow())
       })

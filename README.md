@@ -21,6 +21,7 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 - **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
 - **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
 - **Status Page**: A page under **Webapps** lists every entry with its current value, its state and a reset button.
+- **Reset Record (v0.2.1+)**: Each total records when and why it was last cleared: a new period, the followed path falling from one value to another, a request, or a change of time zone. The status page shows the record, together with the last change of the followed time zone and the time the plugin started.
 - **Clock Safety**: Sums are measured on a monotonic clock, and period resets pause while the system clock is recognisably unset, so a computer that boots at 1970 does not reset its totals or count the correction as elapsed time.
 
 ## Configuration
@@ -170,6 +171,10 @@ The last zone followed is saved with the totals. After a restart the plugin star
 
 Switching **Time zone for day boundaries** to the fixed setting, or changing either path, discards the remembered zone.
 
+### Seeing When the Zone Changed
+
+From version 0.2.1 the status page states the last change of the followed zone: when it happened, and from which zone to which. A change of the path the zone is read from, with the clock time unchanged, is stated as well, because a name carries daylight saving rules and a bare offset does not. The record is saved with the totals. A zone that changes although the vessel has not moved points at the plugin that publishes it; see item 5 under [Limitations and Assumptions](#limitations-and-assumptions).
+
 ## How the Calculations Behave
 
 ### Period Boundaries
@@ -184,7 +189,10 @@ Switching **Time zone for day boundaries** to the fixed setting, or changing eit
 1. Totals, baselines, period starts and the last time zone followed are restored from the state file. Changing an entry's **Resets** setting clears its total, because a total collected under one rule means nothing under another; a period counter keeps its place in its input.
 2. A period counter resumes from the last input value it saw. Whatever the source counted while the server was stopped is added when the first new value arrives. If a boundary passed in the meantime, that change lands in the current period and the status page says so.
 3. An integration adds nothing for the time the server was stopped.
-4. Values the server already holds when the plugin starts are used at once, each judged against the stale timeout by its real age. An integration counts from the start, not from the age of such a value.
+4. From version 0.2.1 a restored total is the entry's value from the first moment, before any input has arrived. Until the input sends a value the entry is shown as stale, with the text "No value on ... since the plugin started", and its total is published or not as **When an input is stale** says. An entry with a stale timeout of `0` never counts as stale, so its restored total is always published. An engine that is switched off therefore does not make "engine hours today" disappear when the server restarts, provided the entry is set to keep publishing. The total still rolls over at its period boundary while the input stays silent, and the text then says the total has been cleared since. Version 0.2.0 showed such an entry as waiting, with no value, until its input spoke.
+5. An entry that reads a restored total which is being published receives it at the first pass after the start. In version 0.2.0 it received nothing until the restored entry's own input had spoken, and a counter chained on it then missed a boundary that had passed in between.
+6. Values the server already holds when the plugin starts are used at once, each judged against the stale timeout by its real age. An integration counts from the start, not from the age of such a value.
+7. The server keeps the last value of every source that ever wrote to a path. From version 0.2.1 only one of them is used at start-up; see [Input Values](#input-values).
 
 ### Counter Direction
 
@@ -206,6 +214,10 @@ Switching **Time zone for day boundaries** to the fixed setting, or changing eit
 3. Text, objects such as a position, and numbers that are not finite are treated the same way as `null`.
 4. Where several sources publish one path, the plugin receives the source the server's source priority prefers.
 5. Values that a source sends in one Signal K update are applied together, so a formula over two of them is calculated once, from both.
+6. The server keeps the last value of every source that ever wrote to a path, and can hand such a value over long after its source went quiet: all of them when the plugin starts, and single ones later. A device that once appeared under a different source name leaves that name's last value behind in this way. Read as a new value, it would look like a change that never happened: a period counter would add the difference, and a total that resets when a path falls would be cleared. From version 0.2.1 such values are kept out by two rules.
+7. **At start-up** one value per path is used: the one the server itself reports for the path, or, where it reports none, the held value with the newest time stamp.
+8. **While running** a value from a source other than the one last read is ignored in two cases. From a source seen before on that path: when it repeats exactly what that source sent last, with the same time stamp and the same value, which is what a held value handed over again looks like. From a source not seen before: when it is older than the value last read. Everything the server held at start-up counts as seen. Any other value is a new reading, whatever its source's clock says. Values from the source last read are never ignored, so a recorded log that is played again from its beginning is still read. A time stamp that lies in the future counts as the moment of arrival.
+9. The status page reports how many values were ignored since the plugin started, and names the last one.
 
 ### Stale Inputs
 
@@ -280,9 +292,10 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 12. Only numbers and true/false values can be read. A field inside an object value cannot be selected.
 13. The plugin does not check whether another source already writes an output path. Two writers on one path give alternating values.
 14. A formula is evaluated on every input value and published at most once a second. It does not average or smooth.
-15. "When another path resets" treats any fall of the followed value as a reset.
-16. Published numbers are rounded to twelve significant digits.
-17. Node.js 22 or later is required.
+15. "When another path resets" treats any fall of the followed value as a reset. The status page records the two values and the source of the lower one.
+16. Whether a value is an old one handed over again is judged partly by time stamps, and the time stamps of two sources need not share a clock. A source that first appears with a clock running behind the source being read loses its first value. An old value from a source the plugin has never seen, stamped later than the current one, is taken as new once. At start-up, where the server reports no value of its own for a path and two sources left values stamped by different clocks, the wrong one can be picked; the first live value then puts it right, at the cost of one false step. See [Input Values](#input-values).
+17. Published numbers are rounded to twelve significant digits.
+18. Node.js 22 or later is required.
 
 ## Prerequisites
 
@@ -310,11 +323,19 @@ The status page is at `/signalk-calc-paths/`. With server security enabled, any 
 
 The page shows each value in an everyday unit (Wh or kWh for joules, hours and minutes for seconds, litres for small volumes) with the published SI value beneath it.
 
+From version 0.2.1 the page also answers why a total reads what it reads:
+
+1. **Last reset.** Under each counter and integration: when the total was last cleared and why. For a total that follows another path, the sentence gives the value the path fell from, the value it fell to, and the source of the lower value, for example "Last reset Oct 11, 23:40: electrical.solar.center.yieldToday fell from 1,540 to 0, a value from ...".
+2. **Corrected start time.** When "counting since" was replaced without clearing the total, because it was unknown or lay in the future after a clock correction, the page says so and gives the time it replaced.
+3. **Zone change.** In the first line: the last change of the followed time zone.
+4. **Plugin start.** In the last line: when the plugin last started. A start that nobody asked for shows up here.
+5. **Ignored values.** A notice counts the input values ignored as outdated; see [Input Values](#input-values).
+
 ### HTTP Interface
 
 | Request | Access | Result |
 | :--- | :--- | :--- |
-| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state and message, and the time zone in use with its source. |
+| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration. |
 
 The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
@@ -327,7 +348,7 @@ Totals are kept in one file in the plugin's data directory:
 ~/.signalk/plugin-config-data/signalk-calc-paths/state.json
 ```
 
-The file is rewritten in place and holds one small record per counter and integration, and the last time zone followed. It keeps no history and does not grow. Removing an entry from the configuration removes its record at the next save; disabling an entry keeps it. An entry's record is discarded when its output path, its input path, its direction, its integration mode or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
+The file is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. It keeps no history and does not grow. Removing an entry from the configuration removes its record at the next save; disabling an entry keeps it. An entry's record is discarded when its output path, its input path, its direction, its integration mode or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
 
 To clear every total, stop the plugin, delete the file and start the plugin. A file that cannot be read is moved aside as `state.json.unreadable-<number>` and reported in the plugin status.
 
@@ -359,13 +380,17 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 **An entry stays at "Waiting".** No value has arrived on one of its inputs. The status page names the path. Check its spelling against **Data > Browser**.
 
-**An entry shows "Stale".** The input stopped updating for longer than the stale timeout. For an input that is sent only when it changes, set the stale timeout to `0`.
+**An entry shows "Stale".** The input stopped updating for longer than the stale timeout. For an input that is sent only when it changes, set the stale timeout to `0`. From version 0.2.1 an entry also shows "Stale" with the text "No value on ... since the plugin started" while it holds a total restored after a restart and its input has not sent anything yet; this ends with the input's first value.
 
 **A daily total resets at the wrong time.** The status page states the time zone in use and where it comes from. If it says UTC read from a followed path, the plugin publishing the ship's time is probably still at its default; see [Setting It Up](#setting-it-up). If it says the server's own time zone and the server runs on UTC, either install a ship's time plugin or pick a zone under **Time zone when none is published**. If it names a followed path, the zone published there is the one to check, under **Data > Browser**.
 
 **The status page says no ship's time has been published.** Nothing has arrived on either followed path. Check under **Data > Browser** that `environment.time.timezoneRegion` or `environment.time.timezoneOffset` exists, and that the plugin publishing it is enabled. A ship's time plugin that works from the position publishes nothing until the vessel has a position.
 
 **The status page says a followed value is not a time zone.** The path holds something other than a zone name or an offset in hours and minutes. See [What a Followed Path May Hold](#what-a-followed-path-may-hold).
+
+**A total started again at an unexpected time.** From version 0.2.1 the status page says when and why under the entry, after "Last reset". A fall of the followed path is given with both values and the source. If the lower value came from a source that should not be writing that path, the fault is upstream of this plugin. If the page instead says the start time was set without clearing the total, the system clock was corrected; see [System Clock](#system-clock).
+
+**A total is missing after a server restart.** Version 0.2.0 showed a restored total only once its input had sent a value. Version 0.2.1 shows it at once. Whether it is also published while the input is silent is decided by **When an input is stale**; an entry with a stale timeout of `0` always publishes it.
 
 **A daily total was cleared, or not cleared, when the boat changed time zone.** This follows the calendar date. See the examples under [When the Boat Changes Time Zone](#when-the-boat-changes-time-zone).
 

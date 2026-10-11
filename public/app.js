@@ -137,9 +137,9 @@
     const from = source.path || 'Signal K'
     switch (source.kind) {
       case 'path':
-        return `${start}, the ship's time read from ${from}.`
+        return `${start}, the ship's time read from ${from}.${describeZoneChange(source.lastChange)}`
       case 'remembered':
-        return `${start}, the ship's time last read from ${from}. Nothing has been published there since the plugin started.`
+        return `${start}, the ship's time last read from ${from}. Nothing has been published there since the plugin started.${describeZoneChange(source.lastChange)}`
       case 'setting':
         return source.follow
           ? `${start}, the zone chosen in the settings. No ship's time has been published on ${waitingFor}.`
@@ -151,13 +151,57 @@
     }
   }
 
+  /** Writes a zone for people: a fixed offset as "UTC+03:00". */
+  function zoneLabel (zone) {
+    return /^[+-]\d{2}:\d{2}$/.test(zone) ? `UTC${zone}` : zone
+  }
+
+  /**
+   * Says when the followed zone last changed. A zone that changes without
+   * the boat having moved is worth seeing: it moves every day boundary.
+   */
+  function describeZoneChange (change) {
+    if (!change || !change.at) return ''
+    if (change.from === change.to) {
+      return ` Since ${when(change.at)} it is read from ${change.toPath || 'another path'}${change.fromPath ? `, before that from ${change.fromPath}` : ''}.`
+    }
+    return ` It changed from ${zoneLabel(change.from)} to ${zoneLabel(change.to)} on ${when(change.at)}.`
+  }
+
+  /**
+   * Says why a total was last cleared. Without this a total that starts
+   * again at an unexpected time gives no hint of the reason.
+   */
+  function describeReset (record) {
+    if (!record || !record.at) return ''
+    const at = when(record.at)
+    switch (record.cause) {
+      case 'period':
+        return ` Last reset ${at}: a new ${record.period || 'period'} began.`
+      case 'zone':
+        return ` Last reset ${at}: the time zone changed${record.zone ? ` to ${zoneLabel(record.zone)}` : ''} and a new period had already begun there.`
+      case 'path': {
+        const fall = Number.isFinite(record.from) && Number.isFinite(record.to) ? ` fell from ${figure(record.from)} to ${figure(record.to)}` : ' fell'
+        const source = record.source ? `, a value from ${record.source}` : ''
+        return ` Last reset ${at}: ${record.path || 'the followed path'}${fall}${source}.`
+      }
+      case 'request':
+        return ` Last reset ${at}: by request, from this page or the reset route.`
+      default:
+        return ''
+    }
+  }
+
   /** One sentence saying what kind of entry this is and how it behaves. */
   function describe (entry) {
     if (entry.type === 'formula') return `Formula: ${entry.expression}`
     const kind = entry.type === 'counter' ? 'Period counter' : 'Integration'
     const reset = entry.resets === 'path' ? `resets when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]
     const since = entry.since ? ` Counting since ${when(entry.since)}.` : ''
-    return `${kind} on ${entry.inputs.join(', ')}, ${reset}.${since}`
+    const corrected = entry.sinceCorrected && entry.sinceCorrected.at
+      ? ` The start time was set on ${when(entry.sinceCorrected.at)} without clearing the total, because the earlier one${entry.sinceCorrected.previous ? ` (${when(entry.sinceCorrected.previous)})` : ''} could not be used.`
+      : ''
+    return `${kind} on ${entry.inputs.join(', ')}, ${reset}.${since}${describeReset(entry.lastReset)}${corrected}`
   }
 
   function createRow (entry) {
@@ -332,6 +376,11 @@
       messages.push(notice('warning', 'The system clock looks unset. Totals keep counting, and period resets are paused until the clock is correct.'))
     }
     if (data.timeZoneSource && data.timeZoneSource.problem) messages.push(notice('warning', data.timeZoneSource.problem))
+    const ignored = data.outdatedValues
+    if (ignored && ignored.count > 0 && ignored.last) {
+      const times = ignored.count === 1 ? 'One input value was' : `${ignored.count} input values were`
+      messages.push(notice('warning', `${times} ignored since the plugin started, being older than a value already read for the same path from another source. The last was on ${ignored.last.path} from ${ignored.last.source || 'an unnamed source'}, stamped ${when(ignored.last.timestamp)} and received ${when(ignored.last.at)}.`))
+    }
     for (const problem of data.problems) messages.push(notice('error', problem))
     notices.replaceChildren(...messages)
 
@@ -358,7 +407,8 @@
     } else {
       placeholder.hidden = true
     }
-    refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}`
+    const started = data.startedAt ? `. Plugin running since ${when(data.startedAt)}` : ''
+    refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}${started}`
   }
 
   async function refresh () {

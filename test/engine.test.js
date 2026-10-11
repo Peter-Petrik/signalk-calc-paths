@@ -508,8 +508,12 @@ test('totals survive a restart', () => {
 
   // The plugin is down for ten minutes; the source counter moves on by 25.
   const second = harness(options, saved, NOON + 660000)
+  // Until the inputs speak again the saved totals are shown, and with the
+  // default stale setting they are not published.
   assert.deepEqual(second.tick(0), [])
-  assert.equal(second.state('m.today', 0).state, 'waiting')
+  assert.equal(second.state('m.today', 0).state, 'stale')
+  assert.equal(second.state('m.today', 0).value, 50)
+  assert.match(second.state('m.today', 0).message, /since the plugin started; the saved total is shown and publishing is paused/)
   second.input(1, 'm.total', 1075)
   second.input(1, 'p.power', 100)
   second.tick(1)
@@ -557,6 +561,194 @@ test('a reset of the followed path during downtime is caught on restart', () => 
   second.input(1, 'm.total', 1210)
   second.tick(1)
   assert.equal(second.value('m.today'), 10)
+})
+
+test('a saved total set to keep publishing goes out straight after a restart', () => {
+  const options = {
+    counters: [{ input: 'e.runTime', output: 'e.today', onStale: 'hold' }],
+    integrations: [{ input: 'e.rate', output: 'e.used', onStale: 'hold' }, { input: 'p.power', output: 'p.energy' }]
+  }
+  const first = harness(options)
+  first.input(0, 'e.runTime', 1000)
+  first.input(0, 'e.rate', 2)
+  first.input(0, 'p.power', 100)
+  first.input(30, 'e.runTime', 1900)
+  first.input(30, 'e.rate', 2)
+  first.input(30, 'p.power', 100)
+  first.tick(30)
+
+  // Restarted an hour later with the engine switched off: nothing arrives.
+  const second = harness(options, first.save(30), NOON + 3600000)
+  assert.deepEqual(second.tick(0), [{ path: 'e.today', value: 900 }, { path: 'e.used', value: 60 }])
+  const state = second.state('e.today', 0)
+  assert.equal(state.state, 'stale')
+  assert.equal(state.value, 900)
+  assert.match(state.message, /No value on e\.runTime since the plugin started; still publishing the saved total/)
+  // The entry left at "stop publishing" shows its total and sends nothing.
+  assert.equal(second.state('p.energy', 0).value, 3000)
+  assert.equal(second.value('p.energy'), undefined)
+  // The totals are repeated like any held result.
+  assert.equal(second.tick(5).length, 0)
+  assert.equal(second.tick(10).length, 2)
+
+  // When the input returns, counting carries on from the saved total.
+  second.input(20, 'e.runTime', 1960)
+  second.tick(20)
+  assert.equal(second.value('e.today'), 960)
+  assert.equal(second.state('e.today', 20).state, 'ok')
+})
+
+test('a restored total rolls over at the boundary while its input stays silent', () => {
+  const options = { counters: [{ input: 'e.runTime', output: 'e.today', onStale: 'hold' }] }
+  const first = harness(options)
+  first.input(0, 'e.runTime', 1000)
+  first.input(30, 'e.runTime', 1900)
+  first.tick(30)
+
+  // Restarted at 22:00; midnight passes with the input silent.
+  const second = harness(options, first.save(30), NOON + 10 * 3600000)
+  second.tick(0)
+  assert.equal(second.value('e.today'), 900)
+  second.tick(2 * 3600 + 1)
+  assert.equal(second.value('e.today'), 0)
+  const state = second.state('e.today', 2 * 3600 + 1)
+  assert.equal(state.state, 'stale')
+  assert.equal(state.since, '2026-10-10T00:00:00.000Z')
+  assert.deepEqual(state.lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day' })
+})
+
+test('entries that read a restored total hear it once it is being published', () => {
+  const entries = (onStale) => ({
+    counters: [{ input: 'm.total', output: 'm.today', onStale }],
+    formulas: [{ inputs: [{ name: 'today', path: 'm.today' }], expression: 'today / 2', output: 'm.half' }]
+  })
+  for (const [onStale, expected] of [['hold', 25], ['stop', undefined]]) {
+    const first = harness(entries(onStale))
+    first.input(0, 'm.total', 1000)
+    first.input(30, 'm.total', 1050)
+    first.tick(30)
+    const second = harness(entries(onStale), first.save(30), NOON + 3600000)
+    second.tick(0)
+    assert.equal(second.value('m.half'), expected, onStale)
+  }
+})
+
+test('an entry with nothing saved still waits for its first value after a restart', () => {
+  const options = { counters: [{ input: 'm.total', output: 'm.today', onStale: 'hold' }, { input: 'n.total', output: 'n.today', onStale: 'hold' }] }
+  const first = harness(options)
+  first.input(0, 'm.total', 1000)
+  first.tick(0)
+  const second = harness(options, first.save(0), NOON + 60000)
+  second.tick(0)
+  assert.equal(second.state('m.today', 0).state, 'stale')
+  assert.equal(second.state('n.today', 0).state, 'waiting')
+  assert.equal(second.value('n.today'), undefined)
+})
+
+test('the cause of the last reset is recorded and survives a restart', () => {
+  const options = {
+    counters: [
+      { input: 'm.total', output: 'm.byPath', resets: 'path', resetPath: 'ref.today', staleTimeout: 0 },
+      { input: 'm.total', output: 'm.byDay', staleTimeout: 0 },
+      { input: 'm.total', output: 'm.byHand', resets: 'manual', staleTimeout: 0 }
+    ]
+  }
+  const h = harness(options)
+  h.input(0, 'ref.today', 1540)
+  h.input(0, 'm.total', 1000)
+  assert.equal(h.state('m.byPath', 0).lastReset, null)
+
+  // The followed path falls; the caller names the source of the value.
+  h.engine.inputs([{ path: 'ref.today', value: 0, source: 'victron.center' }], NOON + 100000, 100000)
+  assert.deepEqual(h.state('m.byPath', 100).lastReset, { at: '2026-10-09T12:01:40.000Z', cause: 'path', path: 'ref.today', from: 1540, to: 0, source: 'victron.center' })
+
+  assert.equal(h.engine.reset('m.byHand', NOON + 200000, 200000), true)
+  assert.deepEqual(h.state('m.byHand', 200).lastReset, { at: '2026-10-09T12:03:20.000Z', cause: 'request' })
+
+  h.tick(12 * 3600 + 1)
+  assert.deepEqual(h.state('m.byDay', 12 * 3600 + 1).lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day' })
+  // A reset of one entry leaves the records of the others alone.
+  assert.equal(h.state('m.byPath', 12 * 3600 + 1).lastReset.cause, 'path')
+
+  const saved = h.save(12 * 3600 + 2)
+  const again = harness(options, saved, NOON + 13 * 3600000)
+  assert.deepEqual(again.state('m.byPath', 0).lastReset, { at: '2026-10-09T12:01:40.000Z', cause: 'path', path: 'ref.today', from: 1540, to: 0, source: 'victron.center' })
+  assert.equal(again.state('m.byHand', 0).lastReset.cause, 'request')
+
+  // A record that does not have the expected form is dropped, not shown.
+  saved.entries['m.byPath'].lastReset = { at: 'yesterday', cause: 'path' }
+  saved.entries['m.byHand'].lastReset = { at: NOON, cause: 'gremlins' }
+  const damaged = harness(options, saved, NOON + 13 * 3600000)
+  assert.equal(damaged.state('m.byPath', 0).lastReset, null)
+  assert.equal(damaged.state('m.byHand', 0).lastReset, null)
+})
+
+test('a corrected start time is recorded with the time it replaced', () => {
+  const options = { integrations: [{ input: 'p.power', output: 'p.energy', resets: 'manual' }] }
+  const first = harness(options, null, NOON + DAY)
+  first.input(0, 'p.power', 100)
+  first.tick(0)
+  assert.equal(first.state('p.energy', 0).sinceCorrected, null)
+  // The state was saved by a clock that ran a day ahead. Once the earlier
+  // reading has held for an hour it is believed, and "counting since",
+  // which then lies in the future, is pulled back to the present.
+  const second = harness(options, first.save(0))
+  second.input(0, 'p.power', 100)
+  second.tick(3601)
+  second.tick(3602)
+  const state = second.state('p.energy', 3602)
+  assert.equal(state.since, state.sinceCorrected.at)
+  assert.equal(state.sinceCorrected.previous, '2026-10-10T12:00:00.000Z')
+  const third = harness(options, second.save(3603), NOON + 7200000)
+  assert.equal(third.state('p.energy', 0).sinceCorrected.previous, '2026-10-10T12:00:00.000Z')
+})
+
+test('a restored total that is cleared while its input is silent says so', () => {
+  const options = { counters: [{ input: 'e.runTime', output: 'e.today', onStale: 'hold' }, { input: 'f.total', output: 'f.today' }] }
+  const first = harness(options)
+  first.input(0, 'e.runTime', 1000)
+  first.input(0, 'f.total', 10)
+  first.input(30, 'e.runTime', 1900)
+  first.input(30, 'f.total', 25)
+  first.tick(30)
+  // Restarted the next morning; the day began during the downtime.
+  const second = harness(options, first.save(30), NOON + 18 * 3600000)
+  second.tick(0)
+  const held = second.state('e.today', 0)
+  assert.equal(held.value, 0)
+  assert.match(held.message, /still publishing the total, cleared since\. A period began while the plugin was not running/)
+  const stopped = second.state('f.today', 0)
+  assert.equal(stopped.value, 0)
+  assert.match(stopped.message, /the total, cleared since is shown and publishing is paused/)
+  assert.equal(second.value('f.today'), undefined)
+})
+
+test('a start time that was only unknown is filled in without a correction record, and a reset clears the record', () => {
+  // Changing the Resets setting drops the total and the start time.
+  const before = { integrations: [{ input: 'p.power', output: 'p.energy', resets: 'manual' }] }
+  const after = { integrations: [{ input: 'p.power', output: 'p.energy', resets: 'day' }] }
+  const first = harness(before)
+  first.input(0, 'p.power', 100)
+  first.tick(0)
+  const second = harness(after, first.save(0), NOON + 60000)
+  second.tick(0)
+  second.input(1, 'p.power', 100)
+  second.tick(1)
+  assert.equal(second.state('p.energy', 1).sinceCorrected, null)
+  assert.notEqual(second.state('p.energy', 1).since, null)
+
+  // A real correction is recorded, and forgotten at the next reset.
+  const ahead = harness(before, null, NOON + DAY)
+  ahead.input(0, 'p.power', 100)
+  ahead.tick(0)
+  const third = harness(before, ahead.save(0))
+  third.input(0, 'p.power', 100)
+  third.tick(3601)
+  third.tick(3602)
+  assert.notEqual(third.state('p.energy', 3602).sinceCorrected, null)
+  assert.equal(third.engine.reset('p.energy', NOON + 3700000, 3700000), true)
+  assert.equal(third.state('p.energy', 3700).sinceCorrected, null)
+  assert.equal(third.state('p.energy', 3700).lastReset.cause, 'request')
 })
 
 test('saved totals are dropped when the entry now measures something else', () => {

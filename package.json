@@ -1,6 +1,6 @@
 {
   "name": "signalk-calc-paths",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Signal K plugin to calculate new paths from existing ones: a formula over live values, a daily, weekly, monthly or yearly counter on a running total, and a sum that integrates a rate over time.",
   "main": "index.js",
   "scripts": {

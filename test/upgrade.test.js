@@ -132,7 +132,7 @@ test('a set with faults is refused whole and names each fault at its entry', (t)
 
   const structure = save({ groups: [], entries: [{ id: 'e1', type: 'nope' }] })
   assert.equal(structure.statusCode, 400)
-  assert.deepEqual(structure.body.errors, ['entry 1 has no known type (formula, counter or integration)'])
+  assert.deepEqual(structure.body.errors, ['entry 1 has no known type (formula, counter, integration or cycles)'])
 
   const faults = save({
     groups: [],

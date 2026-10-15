@@ -27,7 +27,8 @@
   const TYPES = {
     formula: { label: 'Formula', explain: 'Calculates a value from live values: power from current and voltage, a sum of several sources, a unit conversion.' },
     counter: { label: 'Period counter', explain: 'Reports how much a running total has grown or fallen since the start of the day, week, month or year: today\'s yield from a lifetime counter, fuel used from a tank level.' },
-    integration: { label: 'Integration', explain: 'Adds up a value over time: energy from power, volume from a flow, distance from speed, or the time something was on.' }
+    integration: { label: 'Integration', explain: 'Adds up a value over time: energy from power, volume from a flow, distance from speed, or the time something was on.' },
+    cycles: { label: 'Cycles', explain: 'Finds the ON and OFF stretches of a device that cycles, such as a fridge compressor or a pump, from a switch, a threshold or a rising and falling value, and reports how long they last.' }
   }
 
   // Units offered while typing; any other text is accepted too.
@@ -115,6 +116,13 @@
 
   /** Whether a field applies, given the entry's other settings. */
   function applies (entry, field) {
+    if (entry.type === 'cycles') {
+      const inputs = Array.isArray(entry.inputs) ? entry.inputs : []
+      if (field === 'smoothing') return inputs.some((input) => input.kind === 'wave')
+      if (field === 'combine') return inputs.length > 1
+      if (field === 'minCycles') return entry.statistic !== 'cycles'
+      return true
+    }
     if (field === 'resetPath') return entry.resets === 'path'
     if (field === 'threshold') return entry.mode === 'time'
     if (field === 'reversal') return entry.direction !== 'net'
@@ -460,7 +468,7 @@
     wrap.hidden = !applies(entry, field)
     live.rows.set(field, wrap)
 
-    if (field === 'inputs') return renderInputs(entry, definition, wrap, live)
+    if (field === 'inputs') return entry.type === 'cycles' ? renderCycleInputs(entry, definition, wrap, live) : renderInputs(entry, definition, wrap, live)
 
     if (definition.type === 'boolean') {
       const box = element('input')
@@ -627,6 +635,129 @@
     return wrap
   }
 
+  /**
+   * The inputs of a Cycles entry: each a path, read as on/off against a
+   * threshold or as a wave with a direction and a swing.
+   */
+  function renderCycleInputs (entry, definition, wrap, live) {
+    wrap.append(element('p', 'field-label', definition.title))
+    const item = definition.items.properties
+    if (!Array.isArray(entry.inputs)) entry.inputs = []
+    const table = element('div', 'inputs')
+    const changed = () => {
+      markDirty()
+      for (const [name, row] of live.rows) row.hidden = !applies(entry, name)
+      refreshChains()
+    }
+    const draw = () => {
+      table.replaceChildren()
+      live.inputHints = []
+      entry.inputs.forEach((input, index) => {
+        const number = index + 1
+        const row = element('div', 'cycle-input')
+        const path = element('input', 'input-path is-path')
+        path.type = 'text'
+        path.value = input.path || ''
+        path.spellcheck = false
+        path.autocapitalize = 'off'
+        path.setAttribute('list', 'calc-paths-list')
+        path.setAttribute('aria-label', `${item.path.title} of input ${number}`)
+        path.placeholder = 'Signal K path'
+        const hint = element('p', 'field-hint')
+        path.addEventListener('input', () => {
+          input.path = path.value.trim()
+          checkPath(path, 'input', input.path)
+          hint.textContent = describePath(input.path)
+          changed()
+        })
+        hint.textContent = describePath(input.path)
+        live.inputHints.push({ hint, input })
+
+        const kind = element('select')
+        kind.setAttribute('aria-label', `${item.kind.title} for input ${number}`)
+        item.kind.enum.forEach((value, i) => {
+          const option = element('option', '', item.kind.enumNames[i])
+          option.value = value
+          kind.append(option)
+        })
+        kind.value = input.kind || item.kind.default
+
+        const settings = element('div', 'cycle-input-settings')
+        const labelled = (title, control) => {
+          const label = element('label', 'cycle-input-setting')
+          label.append(element('span', '', title), control)
+          return label
+        }
+        const numberField = (field) => {
+          const control = element('input')
+          control.type = 'text'
+          control.inputMode = 'decimal'
+          control.value = input[field] === undefined || input[field] === null ? '' : String(input[field])
+          if (item[field].default !== undefined) control.placeholder = String(item[field].default)
+          control.addEventListener('input', () => {
+            const text = control.value.trim()
+            const value = Number(text)
+            if (text === '') delete input[field]
+            else input[field] = Number.isFinite(value) ? value : text
+            markDirty()
+          })
+          return control
+        }
+        const threshold = labelled(item.threshold.title, numberField('threshold'))
+        const direction = element('select')
+        item.direction.enum.forEach((value, i) => {
+          const option = element('option', '', item.direction.enumNames[i])
+          option.value = value
+          direction.append(option)
+        })
+        direction.value = input.direction || item.direction.default
+        direction.addEventListener('change', () => {
+          input.direction = direction.value
+          markDirty()
+        })
+        const directionLabel = labelled(item.direction.title, direction)
+        const swing = labelled(item.swing.title, numberField('swing'))
+        const show = () => {
+          const wave = (input.kind || item.kind.default) === 'wave'
+          threshold.hidden = wave
+          directionLabel.hidden = !wave
+          swing.hidden = !wave
+        }
+        kind.addEventListener('change', () => {
+          input.kind = kind.value
+          show()
+          changed()
+        })
+        show()
+        settings.append(labelled(item.kind.title, kind), threshold, directionLabel, swing)
+
+        const remove = button('Remove', 'is-quiet', () => {
+          entry.inputs.splice(index, 1)
+          draw()
+          changed()
+        }, `Remove input ${number}`)
+        row.append(path, remove, hint, settings)
+        table.append(row)
+      })
+    }
+    draw()
+    const add = button('Add input', '', () => {
+      entry.inputs.push({ path: '', kind: item.kind.default })
+      draw()
+      changed()
+      const fields = table.querySelectorAll('.input-path')
+      if (fields.length > 0) fields[fields.length - 1].focus()
+    })
+    const help = element('div', 'field-help')
+    for (const field of ['kind', 'threshold', 'direction', 'swing']) {
+      const line = element('p')
+      line.append(element('strong', '', `${item[field].title}: `), item[field].description)
+      help.append(line)
+    }
+    wrap.append(table, add, element('p', 'field-help', definition.description), help)
+    return wrap
+  }
+
   /** A short name not used yet in a formula: a, b, c, ... */
   function suggestName (entry) {
     const used = new Set((entry.inputs || []).map((input) => input.name))
@@ -667,8 +798,8 @@
 
   /** The paths an entry reads. */
   function readsOf (entry) {
-    const paths = entry.type === 'formula' ? (entry.inputs || []).map((input) => input.path) : [entry.input]
-    if (entry.type !== 'formula' && entry.resets === 'path') paths.push(entry.resetPath)
+    const paths = Array.isArray(entry.inputs) ? entry.inputs.map((input) => input.path) : [entry.input]
+    if ((entry.type === 'counter' || entry.type === 'integration') && entry.resets === 'path') paths.push(entry.resetPath)
     return paths.filter(Boolean)
   }
 
@@ -753,6 +884,8 @@
     if (type === 'formula') {
       entry.inputs = [{ name: 'a', path: '' }]
       entry.expression = ''
+    } else if (type === 'cycles') {
+      entry.inputs = [{ path: '', kind: 'onoff' }]
     } else {
       entry.input = ''
     }
@@ -907,6 +1040,30 @@
       const threshold = mode === 'time' ? String(Number.isFinite(number) ? number : 0) : ''
       return ['integration', entry.input || '', mode, threshold, entry.resets || 'day'].join('|')
     }
+    if (entry.type === 'cycles') {
+      // What decides where stretches begin and end, read as lib/config.js
+      // reads it (signature() in lib/engine.js); the figure and the window
+      // do not.
+      const text = (value) => typeof value === 'string' ? value.trim() : ''
+      const pick = (value, allowed, fallback) => allowed.includes(value) ? value : fallback
+      const number = (value) => value === null || value === '' || value === undefined ? NaN : Number(value)
+      const nonNegative = (value, fallback) => {
+        const n = number(value)
+        return Number.isFinite(n) && n >= 0 ? n : fallback
+      }
+      const inputs = (Array.isArray(entry.inputs) ? entry.inputs : []).map((i) => {
+        const item = i && typeof i === 'object' ? i : {}
+        const kind = pick(item.kind, ['onoff', 'wave'], 'onoff')
+        if (kind === 'onoff') {
+          const threshold = number(item.threshold)
+          return [text(item.path), kind, Number.isFinite(threshold) ? threshold : 0]
+        }
+        const swing = number(item.swing)
+        return [text(item.path), kind, pick(item.direction, ['falling', 'rising'], 'falling'), Number.isFinite(swing) ? swing : null]
+      })
+      const steps = Math.max(1, Math.round(nonNegative(entry.smoothing, 150) / 30))
+      return ['cycles', JSON.stringify(inputs), pick(entry.combine, ['all', 'any'], 'all'), steps, nonNegative(entry.shortest, 120), nonNegative(entry.staleTimeout, 180)].join('|')
+    }
     return null
   }
 
@@ -941,11 +1098,14 @@
       const entry = now.get(old.output)
       if (!entry) {
         const renamed = state.entries.find((e) => e.id === old.id)
+        const what = old.type === 'cycles' ? 'the cycles counted so far' : 'its total'
         lost.push(renamed
-          ? `"${entryLabel(renamed)}" starts again from zero: its output path changed, and its total stays with the old path.`
-          : `"${entryLabel(old)}" is deleted, and its total with it.`)
+          ? `"${entryLabel(renamed)}" starts again: its output path changed, and ${what} stay${old.type === 'cycles' ? '' : 's'} with the old path.`
+          : `"${entryLabel(old)}" is deleted, and ${what} with it.`)
       } else if (measure(entry) !== before) {
-        lost.push(`"${entryLabel(entry)}" starts again from zero: what its total is measured from changed (input, direction, mode, threshold or reset rule).`)
+        lost.push(entry.type === 'cycles'
+          ? `"${entryLabel(entry)}" forgets the cycles counted so far: how its stretches are found changed (inputs, combination, smoothing, shortest stretch or stale timeout).`
+          : `"${entryLabel(entry)}" starts again from zero: what its total is measured from changed (input, direction, mode, threshold or reset rule).`)
       }
     }
     return lost
@@ -959,7 +1119,7 @@
       return
     }
     const box = element('div', 'notice is-warning save-check')
-    box.append(element('p', '', 'Saving changes these totals:'))
+    box.append(element('p', '', 'Saving changes what these entries have counted:'))
     const list = element('ul')
     for (const line of lost) list.append(element('li', '', line))
     const go = button('Save anyway', 'is-confirm', () => send())
@@ -1099,7 +1259,16 @@
         if (typeof value === 'boolean') entry.enabled = value
       } else if (field === 'inputs') {
         if (Array.isArray(value)) {
-          entry.inputs = value.filter((i) => i && typeof i === 'object').map((i) => ({ name: typeof i.name === 'string' ? i.name : '', path: typeof i.path === 'string' ? i.path : '' }))
+          const fields = definition.items.properties
+          entry.inputs = value.filter((i) => i && typeof i === 'object').map((i) => {
+            const kept = {}
+            for (const [name, spec] of Object.entries(fields)) {
+              const v = i[name]
+              if (spec.type === 'number' ? (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'string' : typeof v === 'string') kept[name] = v
+            }
+            if (raw.type === 'formula') return { name: kept.name || '', path: kept.path || '' }
+            return kept
+          })
         }
       } else if (definition.type === 'number') {
         if ((typeof value === 'number' && Number.isFinite(value)) || typeof value === 'string') entry[field] = value

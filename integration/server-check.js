@@ -14,9 +14,9 @@
  * start, which the check verifies, together with the values, the metadata,
  * the status route, the reset route and the status page. It then saves an
  * edited set through the editor's route and verifies that the unchanged
- * entries keep running. Last it publishes a time zone on a followed path,
+ * entries keep running. It publishes a time zone on a followed path,
  * the way a ship's time plugin would, and verifies that the plugin takes it
- * up.
+ * up. Last it adds a cycles entry on a switch it toggles itself.
  *
  * This file lives outside test/ on purpose: the Node.js test runner picks up
  * every file under a test directory, and this one needs a server.
@@ -221,6 +221,38 @@ async function main () {
     return /3 entries: 3 publishing\. Time zone UTC\+03:00/.test(message) ? message : null
   })
   console.log(`  plugin status: ${statusMessage}`)
+
+  // A cycles entry on a switch of the check's own, switched every three
+  // seconds; a shortest stretch of one second lets it count them quickly.
+  const SWITCH = 'calcPathsCheck.switch'
+  const before = await getJson(`/plugins/${PLUGIN}/api/config`)
+  const cycles = { id: 'checkCycles', type: 'cycles', name: 'Check cycles', inputs: [{ path: SWITCH, kind: 'onoff', threshold: 0 }], statistic: 'onMedian', minCycles: 2, shortest: 1, longest: 60, staleTimeout: 0, output: 'calcPathsCheck.onMedian' }
+  const withCycles = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: before.revision, groups: before.groups, entries: [...before.entries, cycles] })
+  })
+  assert.equal(withCycles.status, 200, `saving a cycles entry answered ${withCycles.status}`)
+  for (let i = 0; i < 10; i++) {
+    await publish(SWITCH, i % 2 === 0)
+    await sleep(3000)
+  }
+  const counted = await eventually('the cycles entry to publish', async () => {
+    const body = await getJson(`/plugins/${PLUGIN}/api/entries`)
+    const entry = body.entries.find((e) => e.key === 'checkCycles')
+    return entry && entry.state === 'ok' && entry.cycles.count >= 2 ? entry : null
+  })
+  // Each ON stretch lasted about three seconds.
+  assert.ok(counted.value > 1 && counted.value < 6, `median ON time ${counted.value} s`)
+  assert.equal(counted.unit, 's')
+  const onMedian = await selfPath('calcPathsCheck.onMedian')
+  assert.equal(onMedian.$source, PLUGIN)
+  const forget = await fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent('calcPathsCheck.onMedian')}/reset`, { method: 'POST' })
+  assert.equal(forget.status, 200, `forgetting the cycles answered ${forget.status}`)
+  const forgotten = (await getJson(`/plugins/${PLUGIN}/api/entries`)).entries.find((e) => e.key === 'checkCycles')
+  assert.equal(forgotten.cycles.count, 0)
+  assert.equal(forgotten.lastReset.cause, 'request')
+  console.log(`  cycles entry counted ${counted.cycles.count} cycles with a median ON time of ${counted.value} s, and forgot them on request`)
 
   // Leave the server as it was found.
   const current = await getJson(`/plugins/${PLUGIN}/api/config`)

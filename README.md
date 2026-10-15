@@ -1,19 +1,20 @@
 # Signal K Calculated Paths
 ![Calculated Paths icon](icon.svg)
 
-This plugin calculates new Signal K paths from existing ones and publishes them like any other data. It offers three kinds of calculation: a formula over live values, a counter that reports how much a running total has changed since the start of a day, week, month or year, and an integration that adds up a rate over time. It targets the Signal K Node server and is meant for boats whose instruments report a raw figure (a current and a voltage, a lifetime energy total, an engine speed) where a derived figure is wanted (power, energy today, engine hours today).
+This plugin calculates new Signal K paths from existing ones and publishes them like any other data. It offers four kinds of calculation: a formula over live values, a counter that reports how much a running total has changed since the start of a day, week, month or year, an integration that adds up a rate over time, and a cycle finder that reports how long a cycling device such as a fridge compressor runs and rests. It targets the Signal K Node server and is meant for boats whose instruments report a raw figure (a current and a voltage, a lifetime energy total, an engine speed) where a derived figure is wanted (power, energy today, engine hours today).
 
 ## Project Status
 
 New and actively maintained. The first public release was 0.1.0, in October 2026. The calculations are covered by automated tests and were checked against recorded data from a boat, and the plugin has run inside Signal K server 2.33.0. Wider field use is still to come. See [CHANGELOG.md](CHANGELOG.md) for release history and [Issues](https://github.com/Peter-Petrik/signalk-calc-paths/issues) for planned work.
 
-The plugin publishes calculated values into Signal K paths. It is not an automation tool and does not replace Node-RED: it switches nothing and raises no notifications.
+The plugin publishes calculated values into Signal K paths. It is not an automation tool and does not replace Node-RED: it switches nothing and raises no notifications. A rules or automation plugin can act on the values it publishes, for example to warn when a freezer's compressor cycles have grown long enough to call for a defrost.
 
 ## Features
 
 - **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`.
 - **Period Counters**: The change in a running total since the start of the day, week, month or year, or since a manual reset. Counting increases suits lifetime energy and engine run time; counting decreases turns a falling tank level into consumption.
 - **Integrations**: A rate added up over time (power into energy, flow into volume), or the time an input spends above a threshold (engine running time, time a switch is on).
+- **Cycles (v0.4.0+)**: The ON and OFF stretches of a device that cycles, found from a switch, from a value against a threshold, or from a value that rises and falls with the device, such as the temperature or humidity inside a fridge. Two or more inputs can be combined, ON while all of them are ON or while any of them is. The median ON time, median OFF time, median cycle, duty cycle, last ON time or number of cycles over a window such as 24 hours is published.
 - **Selectable Resets**: Each total resets at the start of a day, week, month or year, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
 - **Ship's Time Zone (v0.2.0+)**: Days begin at local midnight in the time zone the vessel keeps. The zone is read from Signal K, where a plugin such as Ship's Time publishes it, and changes by itself when the boat changes time zone. A zone chosen in the settings is used when nothing is published.
 - **Chaining**: An entry can read the output of another entry. A formula can feed an integration, and a counter can feed a formula. Entries are calculated in dependency order, each once per incoming update.
@@ -89,6 +90,56 @@ Assignment, function definitions, arrays, string concatenation and property acce
 | Threshold | 0 | Used when adding up time. Time counts while the input is greater than this. |
 | Resets, Path to follow for resets | Every day | As for period counters. |
 | When values stop for longer than the stale timeout | Leave the gap out | Leave the gap out of the total, or bridge it with the last value. |
+
+### Cycles
+
+A Cycles entry finds the ON and OFF stretches of a device that cycles and publishes one figure about them. See [How Cycles Are Found](#how-cycles-are-found) for the details, and [Fridge and Freezer Compressors](#fridge-and-freezer-compressors) for a worked example.
+
+| Field | Default | Meaning |
+| :--- | :--- | :--- |
+| Inputs | none | One or more paths that show when the device runs. Each is read as on/off or as a wave, as set below. |
+| Read as | On/off | **On/off, against a threshold**: the input is ON while its value is greater than **ON above**. A switch sends true or false, which count as 1 and 0. **Wave**: the input rises and falls with the device without saying which state it is in; every stretch between two turning points is one ON or one OFF stretch. |
+| ON above | 0 | On/off inputs. In the input's own unit, for example `1` for a current in amperes. |
+| ON while the value is | Falling | Wave inputs. Falling for the temperature or humidity in a fridge or freezer, which drop while the compressor runs; rising for something a heater warms. |
+| Swing | none, required | Wave inputs. How far the value must turn back before a turning point counts, in the input's own unit as Signal K publishes it. See [Choosing the Swing](#choosing-the-swing). |
+| Combine inputs | All inputs ON (and) | With more than one input: ON while every input is ON, or while at least one is. See [Combining Inputs](#combining-inputs). |
+| Publish | Median ON time | Median ON time, median OFF time, median cycle (an ON stretch plus the OFF stretch after it), duty cycle (the share of time ON), last ON time, or number of cycles. Times are published in seconds, the duty cycle as a ratio from 0 to 1, the number of cycles as a plain number. |
+| Window | 24 hours | The figure is taken from the stretches that ended within this many hours. |
+| Cycles needed | 3 | Nothing is published until the window holds this many complete ON stretches. Not used for the number of cycles, which is always published. |
+| Smoothing | 150 s | Wave inputs. The span the 30-second step means are averaged over before turning points are looked for. `30` switches this second averaging off. |
+| Shortest stretch | 120 s | A change of the combined state counts only once it has held this long. |
+| Longest stretch | 7200 s | Stretches longer than this are left out of the figures. A wave that has not turned for this long is left out of the combination. |
+| Unit | empty | Left empty, the unit of the figure is published: `s` for times, `ratio` for the duty cycle. |
+| Stale timeout | 180 s | An input with no new value for this long has a gap, and the stretch under way is not measured. Two or three times the interval at which the slowest input reports; `0` for an input sent only when it changes, such as a switch state. Cycles entries default to 180 s rather than 60 s, so that a sensor reporting about once a minute is not cut by one late report. |
+
+#### Combining Inputs
+
+The inputs are combined at each moment, as the conditions of a rule are. "All" is ON only while every input says ON, so a cycle that only one input shows, such as a fridge door left open, is not counted. "Any" is ON while at least one input says ON.
+
+Inputs that respond with a delay change the lengths read. In a fridge the humidity follows the compressor a little later than the temperature does. Take a compressor that runs from 10:00 to 10:10:
+
+| Input | ON while falling |
+| :--- | :--- |
+| Temperature | 10:00 to 10:10 |
+| Humidity | 10:02 to 10:12 |
+| **All inputs ON (and)** | 10:02 to 10:10, read as **8 minutes** |
+| **Any input ON (or)** | 10:00 to 10:12, read as **12 minutes** |
+
+Neither is the compressor's own 10 minutes, and the difference is the same from one cycle to the next. A combined figure therefore shows a trend as well as a single input does, but an alert limit must be chosen on the combined figure, not taken from a measurement of one input or of the compressor itself.
+
+An input with nothing to say is left out, and the others decide alone: an input with no value yet or with a gap in its data, and a wave that has not turned for longer than the longest stretch. The last covers a sensor too slow or too well insulated to show the cycles at all. A stretch during which an input drops out or comes back is not measured, because part of it was timed by different inputs.
+
+#### Choosing the Swing
+
+The swing is in the unit Signal K publishes, which is not always the unit a display shows:
+
+| Input | Unit in Signal K | A swing of |
+| :--- | :--- | :--- |
+| Temperature | kelvin (`K`) | `0.05` is 0.05 °C |
+| Relative humidity | ratio from 0 to 1 | `0.01` is one percentage point |
+| Current | amperes (`A`) | `0.5` is half an ampere |
+
+Set it above the noise of the sensor and below the rise and fall of one cycle. Too small, and noise cuts stretches into pieces; too large, and cycles are missed. A third of the typical rise and fall of one cycle is a reasonable start. A history of the input in a database such as InfluxDB, viewed over an hour, shows both. Then compare the number of cycles on the status page with the graph.
 
 ## Time Zones and Day Boundaries
 
@@ -235,6 +286,8 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 
 **Forward again.** If the settings hold entries while `entries.json` exists, `entries.json` stays in charge: the entries in the settings are not used, and are kept as `settings-removed-<number>.json` and removed from the settings. Changes made under 0.2.1 are therefore not carried forward. To carry them forward instead, delete `entries.json` before starting 0.3.0, and the settings' entries are moved again.
 
+**Going back from 0.4.0 to 0.3.0.** Version 0.3.0 does not know the cycles entry type and refuses an `entries.json` that holds one: no entry runs until a new set is saved. Before going back, export the entries as a backup, then delete every cycles entry in the editor and save. The other entries and their totals carry on under 0.3.0. Importing the export after returning to 0.4.0 brings the cycles entries back, with their cycles counted from that moment.
+
 ## How the Calculations Behave
 
 ### Period Boundaries
@@ -278,6 +331,19 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 7. **At start-up** one value per path is used: the one the server itself reports for the path, or, where it reports none, the held value with the newest time stamp.
 8. **While running** a value from a source other than the one last read is ignored in two cases. From a source seen before on that path: when it repeats exactly what that source sent last, with the same time stamp and the same value, which is what a held value handed over again looks like. From a source not seen before: when it is older than the value last read. Everything the server held at start-up counts as seen. Any other value is a new reading, whatever its source's clock says. Values from the source last read are never ignored, so a recorded log that is played again from its beginning is still read. A time stamp that lies in the future counts as the moment of arrival.
 9. The status page reports how many values were ignored since the plugin started, and names the last one.
+
+### How Cycles Are Found
+
+1. **On/off inputs** are ON while the value is above the threshold. A change counts from the moment the value arrives.
+2. **Wave inputs** are averaged into 30-second steps, then smoothed over the smoothing span. The smoothed value stands for the middle of the steps it covers, so smoothing does not delay the turning points. A turning point is found when the smoothed value has turned back by the swing, and placed on the highest or lowest step mean nearby, so a wave that falls fast and rises slowly is not pulled out of shape by the smoothing.
+3. **Delay.** A wave's turning point is known only once the value has turned back by the full swing, and a change of state counts once it has held for the shortest stretch. A stretch is therefore recorded some minutes after it ends: about five minutes for a fridge with the defaults. Inputs are combined only up to the moment every input is known for, so an input that turns out not to show cycles holds the others back until it has not turned for the longest stretch; from then on it is left out. The status page names the latest stretch found, which can trail the device.
+4. **Flicker.** A change of the combined state is accepted once the new state has held for the shortest stretch. A shorter interruption stays inside the stretch it interrupts.
+5. **Gaps.** An input with no new value for longer than the stale timeout has a gap. With a stale timeout of `0`, a wave input has a gap when a whole 30-second step passes without a value. The stretch under way during a gap is not measured.
+6. **What is counted.** Only stretches whose start and end were both seen are measured. The first stretch after the plugin starts, after a gap, or after an entry is changed is not. Stretches longer than the longest stretch are left out of the figures.
+7. **Figures.** The medians are taken over the ON stretches, the OFF stretches and the complete cycles (an ON stretch and the OFF stretch straight after it) that ended within the window. The duty cycle is taken over complete cycles alone, so a window that holds one more OFF than ON stretch does not tilt it. The number of cycles is the number of ON stretches in the window.
+8. **Restarts.** The finished stretches in the window are saved with the totals and survive a restart. The stretch under way at a restart is lost, and so is a wave stretch not yet recorded. After a start, a wave input needs three turning points, about a cycle and a half, before its first stretch is measured. An ON and an OFF stretch on either side of a restart do not count as a complete cycle.
+9. **Changes.** A change of the inputs, how each is read, the combination, the smoothing, the shortest stretch or the stale timeout forgets the stretches counted, and the editor says so before saving. A change of the figure published, the window, the cycles needed or the longest stretch keeps them, and only the stretches not yet recorded are lost, as at a restart. A change of name, unit or group leaves the entry running as it was.
+10. **Forget cycles.** The button on the status page, or the reset route, forgets every stretch counted, for example after a defrost. The stretch under way, and a wave stretch not yet recorded, began before and are left out too, so the figures describe only stretches that began afterwards.
 
 ### Stale Inputs
 
@@ -336,6 +402,42 @@ A period counter on `tanks.freshWater.0.currentVolume`, counting decreases only,
 
 An integration on a switch state such as `electrical.switches.inverter.state`, adding up the time above a threshold of `0`, with a stale timeout of `0`, unit `s`.
 
+### Fridge and Freezer Compressors
+
+A fridge or freezer whose compressor is not monitored directly can be read from a temperature and humidity sensor inside the box. While the compressor runs, both fall; while it rests, both rise. As frost builds up on the evaporator, it insulates it, and the compressor runs longer to cool the box. The median ON time over a day follows that, while a single long stretch after loading provisions or a door left open barely moves a median.
+
+Humidity is usually the clearer signal. A box's air holds little heat, so its humidity rises and falls by several percentage points every cycle, while a sensor's temperature may move by only a few tenths of a degree, or less where the sensor sits away from the evaporator. A Cycles entry with one wave input:
+
+| Field | Value |
+| :--- | :--- |
+| Inputs | `environment.inside.refrigerator.relativeHumidity`, read as a wave, ON while falling, swing `0.01` |
+| Publish | Median ON time |
+| Window | 24 hours |
+| Output path | `environment.inside.refrigerator.compressor.onMedian` |
+
+Where the temperature also shows the cycles clearly, it can be added as a second input, read as a wave, ON while falling, with a swing such as `0.05`, and combined with "All inputs ON (and)", so that a stretch counts only when both agree. See [Combining Inputs](#combining-inputs) for how this shortens the stretches read.
+
+The figure is published in seconds. A rules or automation plugin can then raise a notification when it passes a limit. To choose the limit:
+
+1. Let the entry run for a few days after a defrost. The status page shows every figure, not only the one published, so the median ON time, the median OFF time and the duty cycle of the clean box can be read there.
+2. Set the limit somewhat above that clean figure, and tighten it after the next defrost, once the frosted figure is known too.
+3. After each defrost, press **Forget cycles** so the figure starts again from the clean state.
+
+As an example of what to expect, six weeks of one boat's recorded data, replayed through this entry type with the settings above, gave these daily medians of the ON time:
+
+| Unit | Clean | Frosted | A limit between them |
+| :--- | :--- | :--- | :--- |
+| Fridge | 9.5 to 12 min | 14.5 to 19 min in the ten days before a defrost | 14 min |
+| Freezer | 6.5 to 8 min | 19 to 27 min in the month before a defrost | 15 min |
+
+The day after each defrost the figure fell back to the clean range. Loading provisions raised it by two to four minutes for a day or two, which stays below the limits. The freezer's temperature, with a swing of `0.05`, gave the same figures as its humidity; the fridge's temperature moved too little to be read reliably at any swing, and its humidity alone was used.
+
+### Duty Cycle of a Pump
+
+A Cycles entry with one input, `electrical.switches.pump.state`, read as on/off with **ON above** `0`, stale timeout `0`, publishing the duty cycle. A pump that starts to run more of the time than usual, such as a bilge pump, shows up as a rising duty cycle.
+
+The defaults suit a compressor and need changing for a pump. A pump that runs for a minute would be lost inside the default shortest stretch of 120 seconds, and one that rests for hours would have its OFF stretches left out by the default longest stretch of two hours, leaving no complete cycle. For a pump that runs for a minute or two and rests for hours, set **Shortest stretch** to `10` and **Longest stretch** to `86400`, a day.
+
 ## Limitations and Assumptions
 
 1. An integration adds nothing while the server or the plugin is stopped. A period counter does not have this limit, because the source keeps the total.
@@ -358,6 +460,8 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 18. Node.js 22 or later is required.
 19. A total belongs to its output path. Renaming an output path in the editor starts the total from zero, and the old path keeps its last value in the server until the server restarts.
 20. The editor and its routes need read/write access. On servers that predate per-route access levels they need admin access.
+21. A Cycles entry measures what its inputs show, not the device. A temperature or humidity inside a box responds later than the compressor and is changed by the door and by what is loaded, so its stretches differ from the compressor's own. The figures suit a trend and an alert limit set on them, not a reading of the compressor's run time.
+22. A wave input is read in 30-second steps. A sensor that reports less often, up to about once a minute, leaves some steps empty, and the smoothing averages the steps there are. A pause longer than the stale timeout is a gap, which is why cycles entries default to a stale timeout of 180 seconds; a shorter one, such as 60 seconds for a sensor that reports once a minute, breaks the series at every late report.
 
 ## Prerequisites
 
@@ -373,7 +477,7 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 3. Go to **Apps & Plugins > Configuration > Calculated Paths**, enable the plugin and check the time zone. With a ship's time plugin installed nothing needs to be set. Otherwise pick a zone under **Time zone when none is published** if the server does not run on local time.
 4. Click **Submit**.
 5. Open **Webapps > Calculated Paths** and the **Edit entries** tab.
-6. Click **Add entry**, choose a formula, a period counter or an integration, and fill in its paths and unit.
+6. Click **Add entry**, choose a formula, a period counter, an integration or a cycles entry, and fill in its paths and unit.
 7. Click **Save**.
 8. The **Status** tab shows each entry's value and state, and the time zone in use. Check the new path under **Data > Browser**.
 
@@ -398,7 +502,7 @@ From version 0.2.1 the page also answers why a total reads what it reads:
 | Request | Access | Result |
 | :--- | :--- | :--- |
 | `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). |
-| `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration. |
+| `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration, or makes a cycles entry forget the cycles counted. |
 | `GET /plugins/signalk-calc-paths/api/config` | Read/write or admin | The groups and entries as saved, their revision, and the field definitions the editor builds its forms from. |
 | `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry, or 409 when the set was changed since that revision. |
 | `GET /plugins/signalk-calc-paths/api/paths` | Read/write or admin | Every path on the vessel with its current value and unit, for the editor's suggestions. |
@@ -417,7 +521,7 @@ The entries and the totals are kept in the plugin's data directory:
 
 `entries.json` holds the groups and entries as the editor saves them. A file that cannot be read is left exactly as it is and reported in the plugin status and on the page; no entry runs and no total is saved until a new set is saved in the editor. That save writes the new set in full first, then moves the old file aside as `entries.json.unreadable-<number>`. Signal K's own backup, under **Server > Backup/Restore**, includes the directory.
 
-`state.json` is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. It keeps no history and does not grow. Deleting an entry in the editor removes its record at the next save; switching an entry off keeps it. A record that no entry uses when the plugin starts, such as one left after a damaged `entries.json` was replaced by a smaller set, is kept for 30 days, so an entry with that output that comes back, typed in again or imported, continues its total; after that it is removed. An entry's record is discarded when its output path, its input path, its direction, its integration mode, its **Resets** setting or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
+`state.json` is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. For a cycles entry the record holds the finished stretches in its window, a few hundred numbers for a day of fridge cycles. It keeps no older history and does not grow. Deleting an entry in the editor removes its record at the next save; switching an entry off keeps it. A record that no entry uses when the plugin starts, such as one left after a damaged `entries.json` was replaced by a smaller set, is kept for 30 days, so an entry with that output that comes back, typed in again or imported, continues its total; after that it is removed. An entry's record is discarded when its output path, its input path, its direction, its integration mode, its **Resets** setting or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
 
 To clear every total, stop the plugin, delete the file and start the plugin. A file that cannot be read is moved aside as `state.json.unreadable-<number>` and reported in the plugin status.
 
@@ -432,6 +536,8 @@ The calculations were replayed over five days of recorded data from one boat and
 1. Daily energy from a lifetime counter matched to 0.1 Wh on each of the five days.
 2. Energy from integrating current times voltage matched the lifetime counter within 0.1 % on both days checked.
 3. Engine running time and fuel used matched an independent calculation over a run of 3.25 hours.
+
+From version 0.4.0, cycles entries were replayed over six weeks of recorded fridge and freezer data from the same boat. The median ON times matched those found independently from the same data by a separate analysis script: about 10.5 minutes for the clean fridge, 22.5 minutes for the frosted freezer and 6.5 minutes for the freezer the day after its defrost.
 
 The recorded data is not part of this repository. The automated tests use synthetic data.
 
@@ -473,6 +579,10 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 **A total is higher than expected on a tank or level.** Sensor ripple is being counted. Raise **Smallest change to count**.
 
+**A cycles entry stays at "Waiting".** The message says how many of the cycles needed have been counted in the window, or that no complete cycle within the longest stretch has ended; for the second, raise **Longest stretch**. The first stretch after a start is never measured, and a wave input needs about a cycle and a half to find its first stretch, so with the defaults a figure appears after four to five cycles: about two hours for a fridge. If the count stays at zero while the device cycles, see the next item.
+
+**A cycles entry counts too few or too many cycles.** Compare the number of cycles on the status page with the device, or with a graph of the input. Too few: the swing is larger than the input's rise and fall, or the inputs combined with "All" rarely agree; lower the swing, or try each input on its own. Too many, with short stretches: the swing is within the sensor's noise; raise the swing or the smoothing. Remember that the swing is in Signal K's unit: kelvin for temperature, a ratio for humidity.
+
 ## Future Enhancements
 
 These are not implemented.
@@ -492,10 +602,12 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ### Status Page
 ![Status page with groups](screenshots/webapp-status.png)
+![A cycles entry on the status page](screenshots/webapp-status-cycles.png)
 
 ### Entry Editor
 ![Entry editor with groups](screenshots/webapp-editor.png)
 ![A formula in the editor, with its live preview](screenshots/webapp-editor-formula.png)
+![A cycles entry with two wave inputs](screenshots/webapp-editor-cycles.png)
 
 ### Plugin Settings
 ![Time zone settings](screenshots/configuration-timezone.png)

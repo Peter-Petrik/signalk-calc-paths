@@ -189,10 +189,10 @@ test('the form schema offers every field the configuration reader uses', () => {
 
   // The editor's field order lists every field once and only fields that
   // exist, and the entries file keeps every field the editor offers.
-  for (const type of ['formula', 'counter', 'integration']) {
+  for (const type of ['formula', 'counter', 'integration', 'cycles']) {
     const listed = entryOrder[type].filter((field) => field !== '*')
     assert.deepEqual([...listed].sort(), fields(type), type)
-    const sample = (f) => f === 'enabled' ? true : f === 'inputs' ? [] : entryFields[type].properties[f].type === 'number' ? 1 : 'x'
+    const sample = (f) => (f === 'enabled' ? true : f === 'inputs' ? [] : entryFields[type].properties[f].type === 'number' ? 1 : 'x')
     const kept = Object.keys(checkDocument({ groups: [], entries: [{ id: 'e1', type, ...Object.fromEntries(fields(type).map((f) => [f, sample(f)])) }] }, true).doc.entries[0])
     assert.deepEqual(kept.filter((f) => !['id', 'group', 'type'].includes(f)).sort(), fields(type), type)
   }

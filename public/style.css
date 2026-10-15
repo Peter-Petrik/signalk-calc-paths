@@ -760,6 +760,43 @@ input[type="checkbox"] {
   margin-top: 0;
 }
 
+.cycle-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  max-width: 42rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+}
+
+.cycle-input .field-hint {
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+
+.cycle-input-settings {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.cycle-input-setting {
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.88rem;
+}
+
+.cycle-input-setting[hidden] {
+  display: none;
+}
+
+.cycle-input-setting input {
+  width: 7rem;
+}
+
 .card-chain {
   margin: 1rem 0 0;
   padding: 0.5rem 0.75rem;
@@ -904,5 +941,19 @@ input[type="checkbox"] {
   .input-row > button {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .cycle-input {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.5rem;
+  }
+
+  .cycle-input > button {
+    grid-row: 3;
+    justify-self: start;
+  }
+
+  .cycle-input .field-hint {
+    grid-row: 2;
   }
 }

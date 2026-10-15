@@ -59,6 +59,12 @@
         return size >= 1000 ? { figure: figure(value / 1000), unit: 'kW' } : null
       case 's': {
         if (size < 60) return null
+        if (type === 'cycles' && size < 3600) {
+          // Cycle lengths are compared by the half minute, so seconds stay.
+          const whole = Math.round(size)
+          const rest = whole % 60
+          return { figure: `${value < 0 ? '-' : ''}${Math.floor(whole / 60)} min${rest ? ` ${rest} s` : ''}`, unit: '' }
+        }
         const sign = value < 0 ? '-' : ''
         const minutes = Math.round(size / 60)
         const hours = Math.floor(minutes / 60)

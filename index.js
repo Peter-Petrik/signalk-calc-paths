@@ -49,7 +49,7 @@ module.exports = function (app) {
   const plugin = {
     id: PLUGIN_ID,
     name: 'Calculated Paths',
-    description: 'Calculate new paths from existing ones: formulas over live values, daily/weekly/monthly/yearly counters on running totals, and integration of a rate over time.',
+    description: 'Calculate new paths from existing ones: formulas over live values, daily/weekly/monthly/yearly counters on running totals, integration of a rate over time, and the ON and OFF cycles of a device such as a fridge compressor.',
     uiSchema
   }
 
@@ -841,7 +841,7 @@ module.exports = function (app) {
       }
       const id = req.params.id
       if (!engine.reset(id, wallNow(), monoNow())) {
-        res.status(404).json({ error: `No counter or integration publishes ${id}.` })
+        res.status(404).json({ error: `No running counter, integration or cycles entry publishes ${id}.` })
         return
       }
       app.debug(`Total reset by request: ${id}`)

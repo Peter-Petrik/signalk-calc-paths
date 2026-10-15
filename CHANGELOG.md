@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-15
+
+### Added
+- **Cycles**: A fourth entry type finds the ON and OFF stretches of a device that cycles, such as a fridge or freezer compressor, a pump or a heater, and publishes one figure over a window such as the last 24 hours: the median ON time, the median OFF time, the median cycle, the duty cycle, the last ON time or the number of cycles. Each input is read as on/off against a threshold, which suits a switch or a current, or as a wave that rises and falls with the device, which suits the temperature or humidity inside a fridge. Two or more inputs are combined as the conditions of a rule: ON while all of them are ON, or while any of them is. A brief flicker stays inside the stretch it interrupts, stretches longer than a set limit are left out, an input with nothing to say is left out of the combination, and a figure is published only once the window holds enough cycles. The finished stretches survive a restart. The status page shows every figure and the latest stretch found, and its **Forget cycles** button starts the figures again, for example after a defrost. The README explains how the inputs are read and combined, how combining inputs that respond with a delay changes the lengths read, how to choose the swing of a wave, and how to set an alert limit for a defrost.
+- **Status Route Fields for Cycles**: Each cycles entry reports `combine`, `statistic`, `window`, `minCycles`, `cycleInputs` and a `cycles` object with every figure, the latest stretch found and how long ago it began.
+
+### Changed
+- **Going Back to 0.3.0**: Version 0.3.0 refuses an `entries.json` that holds a cycles entry, so cycles entries must be deleted before going back. The README describes the steps.
+- **Reset Route**: `POST /api/entries/{id}/reset` also makes a cycles entry forget the cycles counted.
+- **Save Warning**: The editor's question before a save that costs something now reads "Saving changes what these entries have counted", and names a cycles entry whose stretches would be forgotten.
+
 ## [0.3.0] - 2026-10-15
 
 ### Added
@@ -70,6 +81,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.4.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.1.0...v0.2.0

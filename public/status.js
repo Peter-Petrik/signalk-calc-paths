@@ -144,9 +144,51 @@
     }
   }
 
+  /** A length of time as a reader says it: 45 s, 10 min 30 s, 2 h 05 min. */
+  function duration (seconds) {
+    if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '–'
+    const whole = Math.round(seconds)
+    if (whole < 60) return `${whole} s`
+    if (whole < 3600) {
+      const rest = whole % 60
+      return rest === 0 ? `${Math.floor(whole / 60)} min` : `${Math.floor(whole / 60)} min ${rest} s`
+    }
+    const minutes = Math.round(whole / 60)
+    return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
+  }
+
+  /** How a Cycles entry reads its inputs, what it found, and where it is now. */
+  function describeCycles (entry) {
+    const inputs = (entry.cycleInputs || []).map((input) => input.kind === 'wave'
+      ? `${input.path} read as a wave, ON while ${input.direction || 'falling'}`
+      : `${input.path} ON above ${figure(input.threshold || 0)}`)
+    const how = inputs.length > 1
+      ? `Cycles while ${entry.combine === 'any' ? 'any input is ON (or)' : 'all inputs are ON (and)'}: ${inputs.join('; ')}.`
+      : `Cycles of ${inputs[0] || 'no input'}.`
+    const c = entry.cycles || {}
+    const window = `${figure(entry.window)} h`
+    let found
+    if (!c.count) {
+      found = ` No complete cycle in the last ${window} yet.`
+    } else {
+      const duty = Number.isFinite(c.duty) ? `, ON ${figure(c.duty * 100)} % of the time` : ''
+      found = ` ${c.count} ${c.count === 1 ? 'cycle' : 'cycles'} in the last ${window}. Medians: ON ${duration(c.onMedian)}, OFF ${duration(c.offMedian)}, ON and OFF together ${duration(c.periodMedian)}${duty}. The latest ON stretch counted lasted ${duration(c.lastOn)}.`
+    }
+    // Turning points of a wave are found a little after they happen, so
+    // this is the latest stretch found, not necessarily the present state.
+    let now = ''
+    if (c.state === 'on' || c.state === 'off') {
+      now = Number.isFinite(c.stateFor)
+        ? ` The latest stretch found is ${c.state.toUpperCase()}, begun ${duration(c.stateFor)} ago.`
+        : ` The latest stretch found is ${c.state.toUpperCase()}; its start was not seen.`
+    }
+    return `${how}${found}${now}${describeReset(entry.lastReset)}`
+  }
+
   /** One sentence saying what kind of entry this is and how it behaves. */
   function describe (entry) {
     if (entry.type === 'formula') return `Formula: ${entry.expression}`
+    if (entry.type === 'cycles') return describeCycles(entry)
     const kind = entry.type === 'counter' ? 'Period counter' : 'Integration'
     const reset = entry.resets === 'path' ? `resets when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]
     const since = entry.since ? ` Counting since ${when(entry.since)}.` : ''
@@ -206,7 +248,7 @@
     if (!entry.canReset) return
 
     if (row.stage === 'confirm') {
-      const confirm = element('button', 'is-confirm', 'Confirm reset')
+      const confirm = element('button', 'is-confirm', entry.type === 'cycles' ? 'Confirm: forget' : 'Confirm reset')
       confirm.type = 'button'
       confirm.addEventListener('click', () => reset(row, entry))
       const cancel = element('button', 'is-quiet', 'Cancel')
@@ -217,10 +259,11 @@
     }
 
     if (row.result) row.action.append(element('span', `action-result${row.result.failed ? ' is-error' : ''}`, row.result.text))
-    const button = element('button', '', 'Reset to zero')
+    const cycles = entry.type === 'cycles'
+    const button = element('button', '', cycles ? 'Forget cycles' : 'Reset to zero')
     button.type = 'button'
     button.disabled = row.stage === 'busy'
-    button.setAttribute('aria-label', `Reset ${label} to zero`)
+    button.setAttribute('aria-label', cycles ? `Forget the cycles counted for ${label}` : `Reset ${label} to zero`)
     button.addEventListener('click', () => setStage(row, entry, 'confirm'))
     row.action.append(button)
   }
@@ -257,7 +300,7 @@
     try {
       const response = await fetch(`${API}/${encodeURIComponent(entry.id)}/reset`, { method: 'POST', credentials: 'same-origin' })
       if (response.ok) {
-        showResult(row, entry, 'Reset to zero', false)
+        showResult(row, entry, entry.type === 'cycles' ? 'Cycles forgotten' : 'Reset to zero', false)
       } else if (response.status === 401 || response.status === 403) {
         showResult(row, entry, 'Not reset: this login may not change data', true)
       } else {
@@ -272,7 +315,7 @@
 
   /** The paths an entry's sentence may name, to be set in a code font. */
   function pathsOf (entry) {
-    return [entry.output, entry.resetPath, ...(entry.inputs || [])]
+    return [entry.output, entry.resetPath, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path)]
   }
 
   function renderEntry (entry) {
@@ -433,7 +476,7 @@
     })
 
     if (data.entries.length === 0) {
-      showPlaceholder('No entries yet. Add a formula, a period counter or an integration in the editor.', { text: 'Open the editor', href: '#edit' })
+      showPlaceholder('No entries yet. Add a formula, a period counter, an integration or a cycles entry in the editor.', { text: 'Open the editor', href: '#edit' })
     } else {
       placeholder.hidden = true
     }

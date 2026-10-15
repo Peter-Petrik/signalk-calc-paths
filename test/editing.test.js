@@ -230,3 +230,22 @@ test('a kept total is taken up only by an entry that restores from it', () => {
   const finished = new Engine(normalizeConfig(settings, doc([{ ...draft, enabled: true, input: 'b.total' }])), first.serialize(NOON + 1000), 'UTC', first)
   assert.equal(finished.snapshot(NOON + 1000, 1000).find((e) => e.key === 'd').value, 999)
 })
+
+test('a cycles entry keeps running on a new name, and keeps its stretches on a new window', () => {
+  const pump = { id: 'cy', type: 'cycles', inputs: [{ path: 'sw.pump', kind: 'onoff' }], statistic: 'cycles', output: 'sw.pumpCycles', staleTimeout: 0, shortest: 30 }
+  const h = harness(doc([pump]))
+  // Five minutes ON, five OFF, four times.
+  for (let t = 0; t <= 2400; t += 300) h.input(t, 'sw.pump', (t / 300) % 2 === 0)
+  h.tick(2400)
+  const counted = h.status('cy', 2400).cycles.count
+  assert.ok(counted >= 3, `counted ${counted}`)
+  const before = h.entry('cy')
+  h.edit(2401, doc([{ ...pump, name: 'Pump cycles' }]))
+  assert.equal(h.entry('cy'), before)
+  h.edit(2402, doc([{ ...pump, name: 'Pump cycles', window: 12 }]))
+  assert.notEqual(h.entry('cy'), before)
+  assert.equal(h.status('cy', 2402).cycles.count, counted)
+  // A new swing or input forgets them.
+  h.edit(2403, doc([{ ...pump, inputs: [{ path: 'sw.pump', kind: 'onoff', threshold: 0.5 }] }]))
+  assert.equal(h.status('cy', 2403).cycles.count, 0)
+})

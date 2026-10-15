@@ -10,18 +10,25 @@
  * This file is the adapter between the Signal K server and the engine in
  * lib/engine.js. It subscribes to the input paths, feeds each value to the
  * engine with a wall-clock and a monotonic time reading, publishes what the
- * engine hands back, saves the engine's state, and serves the small HTTP
- * interface used by the page under Webapps. It also reads the paths that
+ * engine hands back, saves the engine's state, and serves the HTTP
+ * interface used by the page under Webapps: the status of every entry, and
+ * the editor that creates and changes entries. It also reads the paths that
  * carry the ship's time zone and tells the engine when the zone changes.
+ *
+ * The entries live in entries.json in the plugin's data directory; see
+ * lib/store.js. The plugin settings hold what applies to every entry.
  */
 
+const crypto = require('crypto')
 const { performance } = require('perf_hooks')
 
 const { normalizeConfig } = require('./lib/config')
-const { Engine } = require('./lib/engine')
+const { Engine, toNumber } = require('./lib/engine')
+const { compileFormula } = require('./lib/formula')
 const openApi = require('./lib/openapi')
-const { schemaFor, uiSchema } = require('./lib/schema')
+const { entryFields, entryOrder, schemaFor, uiSchema } = require('./lib/schema')
 const { loadState, saveState } = require('./lib/state')
+const store = require('./lib/store')
 const { ZoneTracker } = require('./lib/timezone')
 const packageInfo = require('./package.json')
 
@@ -52,6 +59,23 @@ module.exports = function (app) {
 
   let engine = null
   let normalized = null
+  // The plugin settings last started with, and the entries document in use.
+  let settingsOptions = {}
+  let doc = null
+  // Why the entries file could not be used, while that is so. The plugin
+  // then runs no entries and saves nothing until a new set is saved.
+  let blocked = null
+  // Things the status page says once per start, such as entries having been
+  // moved out of the plugin settings.
+  let notes = []
+  // A failure while putting a saved set to work, shown in the plugin status
+  // until the next save succeeds; see applyDocument().
+  let applyProblem = null
+  // The paths the current subscription covers.
+  let subscribedPaths = new Set()
+  // While set, only values of these paths are collected from the replay of
+  // a new subscription; see resubscribe().
+  let heldOnly = null
   // Decides which time zone is in use; see lib/timezone.js.
   let zones = null
   let stateProblem = null
@@ -147,7 +171,7 @@ module.exports = function (app) {
     if (zone.source === 'path' || zone.source === 'remembered') text += `. Time zone ${zone.label}`
 
     const firstError = normalized.entries.find((e) => e.error)
-    const problem = stateProblem || normalized.problems[0] || (firstError ? `${firstError.label}: ${firstError.error}` : null)
+    const problem = applyProblem || stateProblem || normalized.problems[0] || (firstError ? `${firstError.label}: ${firstError.error}` : null)
     const status = problem ? `error|${text}. ${problem}` : `ok|${text}`
     if (status === lastStatus) return
     lastStatus = status
@@ -330,6 +354,9 @@ module.exports = function (app) {
     // Every held value is remembered, also those not used, so that one
     // handed over again later is recognised; see isOutdated().
     noteSeen(path, source, stamp, value)
+    // After an edit the paths read before are already known; see
+    // resubscribe().
+    if (heldOnly && !heldOnly.has(path)) return
     const known = held.get(path)
     if (known && known.direct && !direct) return
     if (!known || direct || stamp >= known.stamp) held.set(path, { value, stamp, source, direct })
@@ -341,7 +368,7 @@ module.exports = function (app) {
    * the current one would be recorded as a change of zone at every start.
    */
   function collectHeldZone (path, value, timestamp, source, wall = wallNow()) {
-    if (!zones || !zones.paths.includes(path)) return
+    if (!zones || !zones.paths.includes(path) || heldOnly) return
     const stamp = stampOf(timestamp, wall)
     const known = heldZones.get(path)
     if (!known || stamp >= known.stamp) heldZones.set(path, { value, timestamp, stamp, source })
@@ -458,20 +485,125 @@ module.exports = function (app) {
     return false
   }
 
-  plugin.start = function (options) {
-    // The server stops a plugin before starting it again, but nothing is
-    // lost by making sure: a second timer or subscription left running
-    // would publish every value twice.
-    plugin.stop()
-    normalized = normalizeConfig(options)
-    startedAt = wallNow()
-    startedTimeZone = options && typeof options === 'object' ? options.timeZone : undefined
+  /**
+   * Subscribes to the paths the engine reads and the paths that carry the
+   * ship's time zone, and hands over the values the server already holds.
+   *
+   * After an edit of the entries the subscription is made afresh only when
+   * the set of paths changed, and held values are taken in only for paths
+   * that are new: the entries that kept running already know the others.
+   */
+  function resubscribe (initial) {
+    const wanted = new Set([...engine.externalPaths, ...zones.paths])
+    const added = [...wanted].filter((path) => !subscribedPaths.has(path))
+    const removed = [...subscribedPaths].filter((path) => !wanted.has(path))
+    if (!initial && added.length === 0 && removed.length === 0) return
+    for (const unsubscribe of unsubscribes) {
+      try {
+        unsubscribe()
+      } catch (err) {
+        app.debug(`Unsubscribe failed: ${err.message}`)
+      }
+    }
+    unsubscribes = []
+    // Recorded as covered only once the subscription is made, so that a
+    // failed one is made again at the next save.
+    subscribedPaths = new Set()
+    if (wanted.size === 0) return
 
-    const loaded = loadState(app.getDataDirPath())
-    stateProblem = loaded.error
-    if (stateProblem) app.error(stateProblem)
+    const canSubscribe = app.subscriptionmanager && typeof app.subscriptionmanager.subscribe === 'function'
+    if (!canSubscribe) {
+      app.error('The server offers no subscription manager, so no input values can be read.')
+      return
+    }
+    heldOnly = initial ? null : new Set(added)
+    collectCurrentValues(engine.externalPaths.filter((path) => initial || heldOnly.has(path)))
+    // No period or minPeriod is given on purpose: the server then passes
+    // every value through as it arrives. An integration needs each value
+    // at its own time, and a subscription with a period would hand them
+    // over in batches.
+    subscribing = true
+    try {
+      app.subscriptionmanager.subscribe(
+        {
+          context: 'vessels.self',
+          subscribe: [...wanted].map((path) => ({ path }))
+        },
+        unsubscribes,
+        (err) => app.error(`Subscription error: ${err}`),
+        onDelta
+      )
+      subscribedPaths = wanted
+    } finally {
+      subscribing = false
+      heldOnly = null
+    }
+    feedHeldValues()
+  }
 
-    zones = new ZoneTracker(normalized.settings.zone, loaded.state ? loaded.state.zone : null)
+  /**
+   * Reads the full plugin options, for the copy kept when entries are moved
+   * out of the settings. A server without readPluginOptions() gives only
+   * the configuration the plugin was started with.
+   */
+  function fullOptions (options) {
+    try {
+      const stored = app.readPluginOptions()
+      if (stored && typeof stored === 'object') return stored
+    } catch (err) {
+      // Fall through to the configuration in hand.
+    }
+    return { configuration: options }
+  }
+
+  /**
+   * Moves entries found in the plugin settings, where versions before 0.3.0
+   * kept them, into the entries file, and removes them from the settings.
+   *
+   * 1. With no entries file yet, the entries are written into a new one, in
+   *    the order the status page showed them, without groups.
+   * 2. With an entries file already there, it stays in charge: the entries
+   *    in the settings are not used. This happens after going back to
+   *    0.2.1 and forward again.
+   *
+   * Either way the settings as they were are kept as a file first, and the
+   * lists are removed only once everything else is written, so nothing can
+   * be lost part-way. Returns the document to run.
+   */
+  function takeOverLists (current, options, dir) {
+    if (!store.hasListEntries(options)) return current || { version: store.ENTRIES_VERSION, groups: [], entries: [] }
+    let document = current
+    try {
+      const copy = store.keepSettingsCopy(dir, fullOptions(options))
+      if (!document) {
+        document = store.documentFromLists(options)
+        store.saveEntries(dir, document)
+        const count = document.entries.length
+        notes.push(`${count === 1 ? 'The entry was' : `The ${count} entries were`} moved from the plugin settings into the editor on this page. The plugin settings as they were are kept as ${copy} in the plugin's data folder.`)
+        app.debug(`Moved ${count} entries from the plugin settings into ${store.ENTRIES_FILE}; settings kept as ${copy}`)
+      } else {
+        notes.push(`The plugin settings held entries, which were not used: the entries are kept in the editor on this page. The settings as they were are kept as ${copy} in the plugin's data folder.`)
+      }
+    } catch (err) {
+      // Nothing could be written. The entries run from the settings this
+      // time, and the settings are left alone.
+      app.error(`Could not move the entries out of the plugin settings: ${err.message}`)
+      notes.push(`The entries could not be moved out of the plugin settings (${err.message}). They run from the settings until this is fixed.`)
+      return document || store.documentFromLists(options)
+    }
+    if (typeof app.savePluginOptions === 'function') {
+      app.savePluginOptions(store.withoutLists(options), (err) => {
+        if (err) app.error(`Could not remove the entries from the plugin settings: ${err.message}`)
+      })
+    }
+    return document
+  }
+
+  /** Starts the engine on a set of entries. */
+  function startEngine (document, loadedState) {
+    doc = document
+    normalized = normalizeConfig(settingsOptions, doc)
+    zones = new ZoneTracker(normalized.settings.zone, loadedState ? loadedState.zone : null)
     // The zone the server already holds is read before the engine exists,
     // so that the engine starts in the right zone and no total sees a
     // change of zone that is only the plugin catching up.
@@ -488,12 +620,13 @@ module.exports = function (app) {
       }
     }
 
-    engine = new Engine(normalized, loaded.state, zones.zone)
+    engine = new Engine(normalized, loadedState, zones.zone)
     held = new Map()
     heldZones = new Map()
     latest = new Map()
     seenBySource = new Map()
     outdated = { count: 0, last: null }
+    subscribedPaths = new Set()
     lastStatus = null
     lastSaveMono = monoNow()
     ticksSinceZoneCheck = 0
@@ -506,36 +639,10 @@ module.exports = function (app) {
     app.debug(`Starting with ${normalized.entries.length} entries, time zone ${zone.label} (${zone.source}), reading ${engine.externalPaths.length} paths`)
 
     publishMetadata()
-
     // The paths that carry the ship's time zone are subscribed to together
     // with the input paths. They change rarely, and the server passes each
     // value on as it arrives.
-    const subscribed = [...new Set([...engine.externalPaths, ...zones.paths])]
-    const canSubscribe = app.subscriptionmanager && typeof app.subscriptionmanager.subscribe === 'function'
-    if (subscribed.length > 0 && !canSubscribe) {
-      app.error('The server offers no subscription manager, so no input values can be read.')
-    } else if (subscribed.length > 0) {
-      collectCurrentValues(engine.externalPaths)
-      // No period or minPeriod is given on purpose: the server then passes
-      // every value through as it arrives. An integration needs each value
-      // at its own time, and a subscription with a period would hand them
-      // over in batches.
-      subscribing = true
-      try {
-        app.subscriptionmanager.subscribe(
-          {
-            context: 'vessels.self',
-            subscribe: subscribed.map((path) => ({ path }))
-          },
-          unsubscribes,
-          (err) => app.error(`Subscription error: ${err}`),
-          onDelta
-        )
-      } finally {
-        subscribing = false
-      }
-      feedHeldValues()
-    }
+    resubscribe(true)
 
     // One pass at once, not a second from now: period boundaries that
     // passed while the plugin was stopped are applied before anyone reads
@@ -543,6 +650,99 @@ module.exports = function (app) {
     tick()
     tickTimer = setInterval(tick, TICK_MS)
     reportStatus()
+  }
+
+  plugin.start = function (options) {
+    // The server stops a plugin before starting it again, but nothing is
+    // lost by making sure: a second timer or subscription left running
+    // would publish every value twice.
+    plugin.stop()
+    settingsOptions = options && typeof options === 'object' ? options : {}
+    startedAt = wallNow()
+    startedTimeZone = settingsOptions.timeZone
+    notes = []
+    blocked = null
+    applyProblem = null
+    const dir = app.getDataDirPath()
+
+    const loadedEntries = store.loadEntries(dir)
+    if (loadedEntries.error) {
+      // The entries cannot be read, so none run, and nothing is saved: a
+      // save now would write state without the totals of those entries.
+      // The file stays as it is until a new set is saved from the page,
+      // which moves it aside first.
+      blocked = loadedEntries.error
+      app.error(blocked)
+      app.setPluginError(`${blocked}. No entries are running. The file has been left as it is; saving entries on the Calculated Paths page moves it aside and starts a new set.`)
+      return
+    }
+    const document = takeOverLists(loadedEntries.doc, settingsOptions, dir)
+
+    const loaded = loadState(dir)
+    stateProblem = loaded.error
+    if (stateProblem) app.error(stateProblem)
+    startEngine(document, loaded.state)
+  }
+
+  /**
+   * Puts an edited set of entries to work: saves it, and replaces the
+   * engine with one that takes over every entry that still calculates the
+   * same thing as it is. Changed and new entries start, from their saved
+   * totals where they still measure the same thing. Returns how many
+   * entries kept running and how many started.
+   */
+  function applyDocument (document) {
+    const dir = app.getDataDirPath()
+    if (blocked) {
+      const setAside = store.replaceUnreadable(dir, document)
+      if (setAside) notes.push(`The entries file that could not be used was moved aside as ${setAside}.`)
+    } else {
+      store.saveEntries(dir, document)
+    }
+
+    if (!engine) {
+      // Totals saved for outputs the new set does not use are kept in the
+      // state file for 30 days; see Engine#serialize().
+      blocked = null
+      const loaded = loadState(dir)
+      stateProblem = loaded.error
+      startEngine(document, loaded.state)
+      return { kept: 0, started: normalized.entries.filter((e) => e.enabled && !e.error).length }
+    }
+
+    flushPending()
+    const next = normalizeConfig(settingsOptions, document)
+    const saved = engine.serialize(wallNow())
+    const replacement = new Engine(next, saved, zones.zone, engine)
+    const started = replacement.fresh.size
+    const kept = replacement.entries.filter((e) => e.active).length - started
+    engine = replacement
+    normalized = next
+    doc = document
+
+    for (const entry of normalized.entries) {
+      if (entry.error) app.error(`${entry.label}: ${entry.error}`)
+    }
+    app.debug(`Entries saved: ${kept} kept running, ${started} started`)
+    // The set is saved and running from here on. What follows can fail
+    // without undoing that, so a failure is reported, not thrown.
+    let warning = null
+    try {
+      publishMetadata()
+      // Entries that were running already hold the latest values; the new
+      // ones get them first, then any path read for the first time is
+      // subscribed to and its held value taken in.
+      engine.prime(wallNow(), monoNow())
+      resubscribe(false)
+      save()
+    } catch (err) {
+      warning = `The entries were saved, but starting them did not complete: ${err.message}. Restarting the plugin starts them afresh.`
+      app.error(`${warning} ${err.stack || ''}`)
+    }
+    applyProblem = warning
+    lastStatus = null
+    reportStatus()
+    return { kept, started, warning }
   }
 
   plugin.stop = function () {
@@ -556,6 +756,7 @@ module.exports = function (app) {
       }
     }
     unsubscribes = []
+    subscribedPaths = new Set()
     flushPending()
     // Saving on the way out means a restart from the admin UI costs nothing.
     if (engine) save()
@@ -564,17 +765,42 @@ module.exports = function (app) {
     zones = null
   }
 
+  /** Identifies a version of the entries, so that two editors cannot overwrite each other unawares. */
+  function revisionOf (document) {
+    return crypto.createHash('sha256').update(JSON.stringify(document)).digest('hex').slice(0, 16)
+  }
+
+  /**
+   * The current value of a path for the editor: an entry's own result when
+   * an entry publishes the path, otherwise what the server holds.
+   */
+  function currentValue (path) {
+    const producer = engine && engine.byOutput.get(path)
+    if (producer) return producer.value
+    try {
+      const node = app.getSelfPath(path)
+      return node && typeof node === 'object' && 'value' in node ? node.value : undefined
+    } catch (err) {
+      return undefined
+    }
+  }
+
   /**
    * HTTP interface under /plugins/signalk-calc-paths.
    *
    * Plugin routes are admin-only unless registered through router.access().
-   * Reading the status is opened to any logged-in user and resetting a
-   * total to users who may write. Servers that predate router.access()
-   * fall back to plain registration, which keeps both routes admin-only.
+   * Reading the status is opened to any logged-in user. Resetting a total
+   * and everything the editor uses is opened to users who may write. Servers
+   * that predate router.access() fall back to plain registration, which
+   * keeps every route admin-only.
    */
   plugin.registerWithRouter = function (router) {
     const listEntries = (req, res) => {
       if (!engine) {
+        if (blocked) {
+          res.status(503).json({ error: blocked, blocked: true })
+          return
+        }
         res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
         return
       }
@@ -602,6 +828,8 @@ module.exports = function (app) {
         // Values turned away since the plugin started; see isOutdated().
         outdatedValues: { count: outdated.count, last: outdated.last },
         problems: [stateProblem, ...normalized.problems].filter(Boolean),
+        notes,
+        groups: doc.groups,
         entries: engine.snapshot(wallNow(), monoNow())
       })
     }
@@ -621,12 +849,142 @@ module.exports = function (app) {
       res.json({ reset: id })
     }
 
+    // The entries as saved, with the field definitions the editor builds
+    // its forms from.
+    const getConfig = (req, res) => {
+      if (!engine && !blocked) {
+        res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+        return
+      }
+      const document = blocked ? { version: store.ENTRIES_VERSION, groups: [], entries: [] } : doc
+      res.json({
+        ...document,
+        revision: blocked ? null : revisionOf(document),
+        blocked: blocked || null,
+        fields: entryFields,
+        order: entryOrder
+      })
+    }
+
+    // Saves an edited set of entries. The set is refused as a whole when its
+    // structure is wrong, when it was changed elsewhere since the editor
+    // read it, or when an entry that is switched on cannot run; the answer
+    // then names each fault and the entry it belongs to. An entry that is
+    // switched off may be saved unfinished.
+    const putConfig = (req, res) => {
+      if (!engine && !blocked) {
+        res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+        return
+      }
+      const body = req.body && typeof req.body === 'object' ? req.body : {}
+      // The revision read is required, so that no client overwrites a set
+      // it has not seen.
+      if (!blocked && body.revision !== revisionOf(doc)) {
+        res.status(409).json({ error: body.revision === undefined ? 'The revision of the entries read is missing. Read the entries first and send their revision with the save.' : 'The entries were changed elsewhere since this editor read them. Reload the editor to see the current entries.' })
+        return
+      }
+      const { doc: checked, errors } = store.checkDocument({ version: store.ENTRIES_VERSION, groups: body.groups, entries: body.entries }, true)
+      if (!checked) {
+        res.status(400).json({ error: 'The entries could not be saved.', errors })
+        return
+      }
+      const trial = normalizeConfig(settingsOptions, checked)
+      const entryErrors = Object.create(null)
+      let refused = 0
+      for (const entry of trial.entries) {
+        if (!entry.error) continue
+        entryErrors[entry.id] = entry.error
+        if (entry.enabled) refused++
+      }
+      if (refused > 0) {
+        res.status(400).json({ error: `${refused === 1 ? 'One entry' : `${refused} entries`} cannot run as set. Nothing was saved.`, entryErrors })
+        return
+      }
+      let outcome
+      try {
+        outcome = applyDocument(checked)
+      } catch (err) {
+        app.error(`Could not save the entries: ${err.stack || err.message}`)
+        res.status(500).json({ error: `The entries could not be saved: ${err.message}` })
+        return
+      }
+      res.json({ saved: true, revision: revisionOf(doc), ...outcome, entryErrors })
+    }
+
+    // Every path the server knows on this vessel, with its current value and
+    // unit, for the path suggestions of the editor. Objects such as a
+    // position are named by kind only: they cannot be calculated with.
+    const listPaths = (req, res) => {
+      const paths = new Set()
+      try {
+        const available = app.streambundle && typeof app.streambundle.getAvailablePaths === 'function' ? app.streambundle.getAvailablePaths() : []
+        for (const path of available) if (typeof path === 'string' && path !== '') paths.add(path)
+      } catch (err) {
+        app.debug(`Could not list the available paths: ${err.message}`)
+      }
+      if (normalized) for (const entry of normalized.entries) if (entry.output) paths.add(entry.output)
+      const result = []
+      for (const path of [...paths].sort()) {
+        let node
+        try {
+          node = app.getSelfPath(path)
+        } catch (err) {
+          node = undefined
+        }
+        const meta = node && typeof node === 'object' && node.meta && typeof node.meta === 'object' ? node.meta : {}
+        const value = currentValue(path)
+        const item = { path }
+        if (typeof value === 'number' || typeof value === 'boolean') item.value = value
+        else item.kind = value === null ? 'null' : value === undefined ? 'none' : typeof value
+        if (typeof meta.units === 'string') item.units = meta.units
+        if (typeof meta.description === 'string') item.description = meta.description
+        const producer = normalized && normalized.entries.find((entry) => entry.output === path)
+        if (producer) item.entry = producer.id
+        result.push(item)
+      }
+      res.json(result)
+    }
+
+    // Works out a formula on the current values, as the editor's preview.
+    const preview = (req, res) => {
+      const body = req.body && typeof req.body === 'object' ? req.body : {}
+      const inputs = Array.isArray(body.inputs) ? body.inputs.filter((i) => i && typeof i.name === 'string' && typeof i.path === 'string') : []
+      let compiled
+      try {
+        compiled = compileFormula(typeof body.expression === 'string' ? body.expression : '', inputs.map((i) => i.name))
+      } catch (err) {
+        res.json({ error: err.message })
+        return
+      }
+      const values = {}
+      const missing = []
+      for (const input of inputs) {
+        const value = toNumber(currentValue(input.path))
+        if (value === null) missing.push(input.path)
+        else values[input.name] = value
+      }
+      if (missing.length > 0) {
+        res.json({ missing })
+        return
+      }
+      const value = compiled.evaluate(values)
+      res.json(value === null ? { error: 'The expression gives no finite number for the current values.' } : { value, values })
+    }
+
     if (typeof router.access === 'function') {
       router.access('readonly').get('/api/entries', listEntries)
       router.access('readwrite').post('/api/entries/:id/reset', resetEntry)
+      router.access('readwrite').get('/api/config', getConfig)
+      router.access('readwrite').put('/api/config', putConfig)
+      router.access('readwrite').get('/api/paths', listPaths)
+      router.access('readwrite').post('/api/preview', preview)
     } else {
       router.get('/api/entries', listEntries)
       router.post('/api/entries/:id/reset', resetEntry)
+      router.get('/api/config', getConfig)
+      router.put('/api/config', putConfig)
+      router.get('/api/paths', listPaths)
+      router.post('/api/preview', preview)
     }
   }
 

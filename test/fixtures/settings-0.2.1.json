@@ -1,0 +1,243 @@
+{
+  "enabled": true,
+  "enableLogging": false,
+  "enableDebug": false,
+  "configuration": {
+    "timeZoneSource": "follow",
+    "timeZoneRegionPath": "environment.time.timezoneRegion",
+    "timeZoneOffsetPath": "environment.time.timezoneOffset",
+    "timeZone": "server",
+    "dayStart": "00:00",
+    "weekStart": "monday",
+    "repeatInterval": 10,
+    "formulas": [
+      {
+        "enabled": true,
+        "name": "Hardtop solar power (trial)",
+        "inputs": [
+          {
+            "name": "current",
+            "path": "electrical.solar.sp-hardtop.current"
+          },
+          {
+            "name": "voltage",
+            "path": "electrical.solar.sp-hardtop.voltage"
+          }
+        ],
+        "expression": "current * voltage",
+        "output": "electrical.solar.sp-hardtop.panelPowerTrial",
+        "unit": "W",
+        "staleTimeout": 60,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Total solar yield today",
+        "inputs": [
+          {
+            "name": "hardtop",
+            "path": "electrical.solar.sp-hardtop.yieldToday"
+          },
+          {
+            "name": "port",
+            "path": "electrical.solar.port.yieldToday"
+          },
+          {
+            "name": "center",
+            "path": "electrical.solar.center.yieldToday"
+          },
+          {
+            "name": "starboard",
+            "path": "electrical.solar.starboard.yieldToday"
+          }
+        ],
+        "expression": "hardtop + (port + center + starboard) * 3600",
+        "output": "electrical.solar.total.yieldToday",
+        "unit": "J",
+        "staleTimeout": 60,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Speed over ground while moving",
+        "inputs": [
+          {
+            "name": "sog",
+            "path": "navigation.speedOverGround"
+          }
+        ],
+        "expression": "sog > 0.3 ? sog : 0",
+        "output": "navigation.distance.overGround.movingSpeed",
+        "unit": "m/s",
+        "staleTimeout": 60,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Speed over ground while the engine runs",
+        "inputs": [
+          {
+            "name": "sog",
+            "path": "navigation.speedOverGround"
+          },
+          {
+            "name": "rev",
+            "path": "propulsion.port.revolutions"
+          }
+        ],
+        "expression": "sog > 0.3 and rev > 1 ? sog : 0",
+        "output": "navigation.distance.overGround.engineSpeed",
+        "unit": "m/s",
+        "staleTimeout": 60,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Distance under sail",
+        "inputs": [
+          {
+            "name": "total",
+            "path": "navigation.distance.overGround.total"
+          },
+          {
+            "name": "engine",
+            "path": "navigation.distance.overGround.engine"
+          }
+        ],
+        "expression": "total - engine",
+        "output": "navigation.distance.overGround.sail",
+        "unit": "m",
+        "staleTimeout": 0,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Distance under sail today",
+        "inputs": [
+          {
+            "name": "total",
+            "path": "navigation.distance.overGround.totalToday"
+          },
+          {
+            "name": "engine",
+            "path": "navigation.distance.overGround.engineToday"
+          }
+        ],
+        "expression": "total - engine",
+        "output": "navigation.distance.overGround.sailToday",
+        "unit": "m",
+        "staleTimeout": 0,
+        "onStale": "stop"
+      }
+    ],
+    "counters": [
+      {
+        "enabled": true,
+        "name": "Hardtop solar yield today",
+        "input": "electrical.solar.sp-hardtop.yieldTotal",
+        "output": "electrical.solar.sp-hardtop.yieldToday",
+        "unit": "J",
+        "resets": "path",
+        "resetPath": "electrical.solar.center.yieldToday",
+        "direction": "increase",
+        "reversal": "continue",
+        "minStep": 0,
+        "staleTimeout": 60,
+        "onStale": "stop"
+      },
+      {
+        "enabled": true,
+        "name": "Engine run time today (engine counter)",
+        "input": "propulsion.port.runTime",
+        "output": "propulsion.port.runTimeToday",
+        "unit": "s",
+        "resets": "day",
+        "direction": "increase",
+        "reversal": "continue",
+        "minStep": 0,
+        "staleTimeout": 60,
+        "onStale": "hold"
+      },
+      {
+        "enabled": true,
+        "name": "Distance over ground today",
+        "input": "navigation.distance.overGround.total",
+        "output": "navigation.distance.overGround.totalToday",
+        "unit": "m",
+        "resets": "day",
+        "direction": "increase",
+        "reversal": "continue",
+        "minStep": 0,
+        "staleTimeout": 60,
+        "onStale": "hold"
+      },
+      {
+        "enabled": true,
+        "name": "Distance with engine today",
+        "input": "navigation.distance.overGround.engine",
+        "output": "navigation.distance.overGround.engineToday",
+        "unit": "m",
+        "resets": "day",
+        "direction": "increase",
+        "reversal": "continue",
+        "minStep": 0,
+        "staleTimeout": 60,
+        "onStale": "hold"
+      }
+    ],
+    "integrations": [
+      {
+        "enabled": true,
+        "name": "Engine run time today (from revolutions)",
+        "input": "propulsion.port.revolutions",
+        "output": "propulsion.port.runTimeTodayFromRevolutions",
+        "unit": "s",
+        "mode": "time",
+        "threshold": 1,
+        "resets": "day",
+        "gap": "skip",
+        "staleTimeout": 60,
+        "onStale": "hold"
+      },
+      {
+        "enabled": true,
+        "name": "Fuel used today",
+        "input": "propulsion.port.fuel.rate",
+        "output": "propulsion.port.fuel.usedToday",
+        "unit": "m3",
+        "mode": "rate",
+        "threshold": 0,
+        "resets": "day",
+        "gap": "skip",
+        "staleTimeout": 60,
+        "onStale": "hold"
+      },
+      {
+        "enabled": true,
+        "name": "Distance over ground",
+        "input": "navigation.distance.overGround.movingSpeed",
+        "output": "navigation.distance.overGround.total",
+        "unit": "m",
+        "mode": "rate",
+        "threshold": 0,
+        "resets": "manual",
+        "gap": "skip",
+        "staleTimeout": 60,
+        "onStale": "hold"
+      },
+      {
+        "enabled": true,
+        "name": "Distance with engine",
+        "input": "navigation.distance.overGround.engineSpeed",
+        "output": "navigation.distance.overGround.engine",
+        "unit": "m",
+        "mode": "rate",
+        "threshold": 0,
+        "resets": "manual",
+        "gap": "skip",
+        "staleTimeout": 60,
+        "onStale": "hold"
+      }
+    ]
+  }
+}

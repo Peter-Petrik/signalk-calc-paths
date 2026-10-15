@@ -8,11 +8,15 @@
  * plugin CI workflow provides exactly that, with sample NMEA data playing,
  * for every server version it tests.
  *
- * The check configures three entries through the server's own plugin
- * configuration route, waits for them to publish, and verifies the values,
- * the metadata, the status route, the reset route and the status page. It
- * then publishes a time zone on a followed path, the way a ship's time
- * plugin would, and verifies that the plugin takes it up.
+ * The check configures three entries the way version 0.2.1 kept them, in
+ * the lists of the plugin settings, saved through the server's own plugin
+ * configuration route. Version 0.3.0 moves them into its entries file on
+ * start, which the check verifies, together with the values, the metadata,
+ * the status route, the reset route and the status page. It then saves an
+ * edited set through the editor's route and verifies that the unchanged
+ * entries keep running. Last it publishes a time zone on a followed path,
+ * the way a ship's time plugin would, and verifies that the plugin takes it
+ * up.
  *
  * This file lives outside test/ on purpose: the Node.js test runner picks up
  * every file under a test directory, and this one needs a server.
@@ -149,6 +153,42 @@ async function main () {
   assert.deepEqual(status.entries.map((e) => e.type), ['formula', 'counter', 'integration'])
   console.log('  status route reports three entries publishing')
 
+  // The entries were moved out of the plugin settings into the editor.
+  const settings = await getJson(`/skServer/plugins/${PLUGIN}/config`)
+  assert.equal(settings.configuration.formulas, undefined, 'the formulas are still in the plugin settings')
+  assert.equal(settings.configuration.timeZoneRegionPath, ZONE_PATH)
+  const edited = await getJson(`/plugins/${PLUGIN}/api/config`)
+  assert.deepEqual(edited.entries.map((e) => e.output), ['calcPathsCheck.doubled', 'calcPathsCheck.change', 'calcPathsCheck.sum'])
+  assert.equal(typeof edited.revision, 'string')
+  assert.equal(typeof edited.fields.formula.properties.expression.title, 'string')
+  console.log('  entries moved from the plugin settings into the editor')
+
+  // An edited set: a group, a new name, and the same calculations.
+  const group = { id: 'gcheck', name: 'Check' }
+  const entries = edited.entries.map((entry) => ({ ...entry, group: group.id }))
+  entries[0].name = 'Check doubled, renamed'
+  const put = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: edited.revision, groups: [group], entries })
+  })
+  assert.equal(put.status, 200, `saving the edited entries answered ${put.status}`)
+  const answer = await put.json()
+  assert.deepEqual([answer.kept, answer.started], [3, 0])
+  const regrouped = await getJson(`/plugins/${PLUGIN}/api/entries`)
+  assert.deepEqual(regrouped.groups, [group])
+  assert.equal(regrouped.entries[0].name, 'Check doubled, renamed')
+  assert.ok(regrouped.entries.every((e) => e.group === group.id && e.state === 'ok'))
+  const stale = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: edited.revision, groups: [], entries: [] })
+  })
+  assert.equal(stale.status, 409, 'a save from an outdated editor should answer 409')
+  const paths = await getJson(`/plugins/${PLUGIN}/api/paths`)
+  assert.ok(paths.some((p) => p.path === INPUT && typeof p.value === 'number'), `${INPUT} is not offered to the editor`)
+  console.log('  edited entries saved; all three kept running')
+
   await publish(ZONE_PATH, 'Pacific/Marquesas')
   const followed = await eventually('the published time zone to be followed', async () => {
     const body = await getJson(`/plugins/${PLUGIN}/api/entries`)
@@ -183,6 +223,12 @@ async function main () {
   console.log(`  plugin status: ${statusMessage}`)
 
   // Leave the server as it was found.
+  const current = await getJson(`/plugins/${PLUGIN}/api/config`)
+  await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: current.revision, groups: [], entries: [] })
+  })
   await fetch(`${BASE}/skServer/plugins/${PLUGIN}/config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

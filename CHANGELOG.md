@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-15
+
+### Added
+- **Entry Editor**: Entries are created and changed on the plugin's page under Webapps, in a new **Edit entries** tab, instead of in the plugin settings form. Path fields suggest the paths the server knows and show each path's current value and unit; a formula shows its result with the current values as it is typed; each entry says which entries it reads from and which read from it; fields that apply only to some settings appear only then. The forms are built from the same field definitions the settings form used, so titles and explanations are unchanged. The tab appears for users with read/write or admin access.
+- **Groups and Order**: Entries can be sorted into groups named by the user and ordered within them, by dragging with a mouse or with arrow buttons. The status page shows the entries outside any group first, without a heading, then a heading per group in the chosen order; each group can be folded away, and each browser remembers which are. Groups change only what is shown.
+- **Saving Without Interruption**: A save restarts only the entries whose calculation changed. Entries left alone, or changed only in name, unit or group, keep running as they were, mid-stretch, so nothing they were adding up is lost. A started entry is handed the latest value of each path it reads at once. A running entry that reads a restarted one adds up the stretch to the save as usual. Before a save that costs a total (an entry deleted, or its output path, input path, direction, integration mode, threshold or reset rule changed, compared by output path) the page lists what is lost and asks first. A set with an entry that is switched on and cannot run is refused whole, with the fault shown at the entry; an entry that is switched off may be saved unfinished. A save must name the version of the entries it was based on, and one based on an older version is refused, so two browsers cannot overwrite each other unawares. Fields of the wrong kind are dropped, ids such as `constructor` are refused, and a set is limited to 1 MB.
+- **Import and Export**: The set of entries and groups can be exported as a file and imported again, as a backup or to carry it to another server.
+- **Editor Routes**: `GET` and `PUT /api/config` read and save the entries with their revision, `GET /api/paths` lists the vessel's paths with values and units, and `POST /api/preview` works out a formula without saving it. All four need read/write access and are described in the OpenAPI document.
+- **Everyday Units for Speed and Distance**: The status page shows `m/s` also in knots, and `m` from one nautical mile up also in nautical miles.
+
+### Changed
+- **Entries Kept in Their Own File**: Entries and groups are kept in `entries.json` in the plugin's data directory. The plugin settings keep the time zone, day start, week start and repeat interval. On the first start of this version the entries are moved out of the settings in the order the status page showed them, a copy of the settings as they were is kept as `settings-before-0.3.0.json`, and the lists are removed from the settings; every total carries on. Restoring the copy is the way back to 0.2.1; the README describes it, including which totals 0.2.1 does not keep. An `entries.json` that cannot be read is left untouched and reported, and nothing runs or is saved until a new set is saved, which is written in full before the old file is moved aside.
+- **Unused Totals Kept for 30 Days**: A saved total whose output no entry uses when the plugin starts is kept in the state file for 30 days instead of being dropped at the next save, so an entry with that output that comes back continues its total. Up to 0.2.1 such a total was dropped at once. A total of an entry deleted in the editor is dropped at once, after the editor's warning.
+- **Link to the Settings**: The link at the top of the plugin's page reads "Edit plugin configuration". "Edit entries" read as if the values on the page could be edited.
+- **Paths in Sentences**: Paths named in the sentences of the status page, such as the path the time zone is read from, are set in a code font.
+- **Status Route**: Each entry's `key` is now its id in the entries file, and each entry names its `group`; the route also returns the `groups` in order and one-time `notes`, such as the report that entries were moved.
+
+### Fixed
+- **Restart Loss Stated Correctly**: The README said totals are saved on a clean stop. Signal K server 2.33 ends its process on a restart without stopping its plugins, so a restart of the server can lose up to 30 seconds of an integration's total, as a power cut can. The README now says so. The behaviour is unchanged.
+
 ## [0.2.1] - 2026-10-11
 
 ### Added
@@ -50,6 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.3.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Peter-Petrik/signalk-calc-paths/releases/tag/v0.1.0

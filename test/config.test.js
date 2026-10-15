@@ -5,7 +5,8 @@ const { test } = require('node:test')
 
 const { normalizeConfig } = require('../lib/config')
 const { serverTimeZone } = require('../lib/periods')
-const { PART_HOUR_OFFSETS, RENAMED_ZONES, schema, schemaFor, uiSchema } = require('../lib/schema')
+const { PART_HOUR_OFFSETS, RENAMED_ZONES, entryFields, entryOrder, schema, schemaFor, uiSchema } = require('../lib/schema')
+const { checkDocument } = require('../lib/store')
 
 const errorsOf = (options) => normalizeConfig(options).entries.map((e) => e.error)
 
@@ -165,11 +166,12 @@ test('loops between entries are refused, and entries outside the loop still run'
 })
 
 test('the form schema offers every field the configuration reader uses', () => {
-  const fields = (list) => Object.keys(schema.properties[list].items.properties).sort()
-  assert.deepEqual(fields('formulas'), ['enabled', 'expression', 'inputs', 'name', 'onStale', 'output', 'staleTimeout', 'unit'])
-  assert.deepEqual(fields('counters'), ['direction', 'enabled', 'input', 'minStep', 'name', 'onStale', 'output', 'resetPath', 'resets', 'reversal', 'staleTimeout', 'unit'])
-  assert.deepEqual(fields('integrations'), ['enabled', 'gap', 'input', 'mode', 'name', 'onStale', 'output', 'resetPath', 'resets', 'staleTimeout', 'threshold', 'unit'])
-  assert.deepEqual(Object.keys(schema.properties).sort(), ['counters', 'dayStart', 'formulas', 'integrations', 'repeatInterval', 'timeZone', 'timeZoneOffsetPath', 'timeZoneRegionPath', 'timeZoneSource', 'weekStart'])
+  const fields = (type) => Object.keys(entryFields[type].properties).sort()
+  assert.deepEqual(fields('formula'), ['enabled', 'expression', 'inputs', 'name', 'onStale', 'output', 'staleTimeout', 'unit'])
+  assert.deepEqual(fields('counter'), ['direction', 'enabled', 'input', 'minStep', 'name', 'onStale', 'output', 'resetPath', 'resets', 'reversal', 'staleTimeout', 'unit'])
+  assert.deepEqual(fields('integration'), ['enabled', 'gap', 'input', 'mode', 'name', 'onStale', 'output', 'resetPath', 'resets', 'staleTimeout', 'threshold', 'unit'])
+  // The settings form holds only what applies to every entry.
+  assert.deepEqual(Object.keys(schema.properties).sort(), ['dayStart', 'repeatInterval', 'timeZone', 'timeZoneOffsetPath', 'timeZoneRegionPath', 'timeZoneSource', 'weekStart'])
   // Every top-level field has a place in the field order.
   for (const field of Object.keys(schema.properties)) assert.ok(uiSchema['ui:order'].includes(field), field)
 
@@ -183,12 +185,16 @@ test('the form schema offers every field the configuration reader uses', () => {
     for (const child of Object.values(node)) walk(child)
   }
   walk(schema)
+  walk(entryFields)
 
-  // The field order lists only fields that exist.
-  for (const list of ['formulas', 'counters', 'integrations']) {
-    for (const field of uiSchema[list].items['ui:order']) {
-      if (field !== '*') assert.ok(fields(list).includes(field), `${list}.${field}`)
-    }
+  // The editor's field order lists every field once and only fields that
+  // exist, and the entries file keeps every field the editor offers.
+  for (const type of ['formula', 'counter', 'integration']) {
+    const listed = entryOrder[type].filter((field) => field !== '*')
+    assert.deepEqual([...listed].sort(), fields(type), type)
+    const sample = (f) => f === 'enabled' ? true : f === 'inputs' ? [] : entryFields[type].properties[f].type === 'number' ? 1 : 'x'
+    const kept = Object.keys(checkDocument({ groups: [], entries: [{ id: 'e1', type, ...Object.fromEntries(fields(type).map((f) => [f, sample(f)])) }] }, true).doc.entries[0])
+    assert.deepEqual(kept.filter((f) => !['id', 'group', 'type'].includes(f)).sort(), fields(type), type)
   }
 })
 
@@ -203,12 +209,14 @@ test('the schema is plain JSON with no object used in two places', () => {
   }
   walk(schema, 'schema')
   walk(uiSchema, 'uiSchema')
+  seen.clear()
+  walk(entryFields, 'entryFields')
 })
 
 test('the schema defaults produce a valid configuration', () => {
   // What the admin form saves when an entry is added and only the required
   // fields are filled in.
-  const defaults = (list) => Object.fromEntries(Object.entries(schema.properties[list].items.properties).filter(([, p]) => 'default' in p).map(([k, p]) => [k, p.default]))
+  const defaults = (type) => Object.fromEntries(Object.entries(entryFields[type].properties).filter(([, p]) => 'default' in p).map(([k, p]) => [k, p.default]))
   const { entries, problems } = normalizeConfig({
     timeZoneSource: schema.properties.timeZoneSource.default,
     timeZoneRegionPath: schema.properties.timeZoneRegionPath.default,
@@ -217,9 +225,9 @@ test('the schema defaults produce a valid configuration', () => {
     dayStart: schema.properties.dayStart.default,
     weekStart: schema.properties.weekStart.default,
     repeatInterval: schema.properties.repeatInterval.default,
-    formulas: [{ ...defaults('formulas'), inputs: [{ name: 'x', path: 'a.x' }], expression: 'x', output: 'a.y' }],
-    counters: [{ ...defaults('counters'), input: 'a.total', output: 'a.today' }],
-    integrations: [{ ...defaults('integrations'), input: 'a.rate', output: 'a.sum' }]
+    formulas: [{ ...defaults('formula'), inputs: [{ name: 'x', path: 'a.x' }], expression: 'x', output: 'a.y' }],
+    counters: [{ ...defaults('counter'), input: 'a.total', output: 'a.today' }],
+    integrations: [{ ...defaults('integration'), input: 'a.rate', output: 'a.sum' }]
   })
   assert.deepEqual(problems, [])
   assert.deepEqual(entries.map((e) => e.error), [null, null, null])

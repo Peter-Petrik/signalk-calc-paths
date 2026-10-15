@@ -778,11 +778,22 @@ test('only current entries are saved, and a disabled entry keeps its total', () 
   const saved = first.save(10)
   assert.deepEqual(Object.keys(saved.entries).sort(), ['a.today', 'b.today'])
 
-  // b is switched off: its total is kept. a is removed: its total goes.
+  // b is switched off: its total is kept. a is no longer configured at
+  // the start: its total is kept for 30 days, in case an entry with its
+  // output comes back, and then dropped.
   const second = harness({ counters: [{ input: 'b.total', output: 'b.today', enabled: false }] }, saved, NOON + 60000)
   const resaved = second.save(0)
-  assert.deepEqual(Object.keys(resaved.entries), ['b.today'])
+  assert.deepEqual(Object.keys(resaved.entries).sort(), ['a.today', 'b.today'])
   assert.equal(resaved.entries['b.today'].total, 8)
+  assert.equal(resaved.entries['a.today'].total, 5)
+  assert.equal(resaved.entries['a.today'].orphanedAt, saved.savedAt)
+  assert.deepEqual(Object.keys(second.save(29 * 86400).entries).sort(), ['a.today', 'b.today'])
+  assert.deepEqual(Object.keys(second.save(31 * 86400).entries), ['b.today'])
+
+  // An entry that comes back within the 30 days continues its total.
+  const third = harness({ counters: [{ input: 'a.total', output: 'a.today' }] }, resaved, NOON + 120000)
+  assert.equal(third.state('a.today', 0).value, 5)
+  assert.equal(third.save(0).entries['a.today'].orphanedAt, undefined)
 })
 
 test('a value known before start-up is aged correctly and counted from the start', () => {

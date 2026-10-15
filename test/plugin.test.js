@@ -76,8 +76,8 @@ function fakeApp (selfPaths = {}) {
 function fakeRouter (withAccess = true) {
   const routes = {}
   const add = (level) => (method) => (route, handler) => { routes[`${method} ${route}`] = { level, handler } }
-  const router = { get: add('admin')('GET'), post: add('admin')('POST'), routes }
-  if (withAccess) router.access = (level) => ({ get: add(level)('GET'), post: add(level)('POST') })
+  const router = { get: add('admin')('GET'), post: add('admin')('POST'), put: add('admin')('PUT'), routes }
+  if (withAccess) router.access = (level) => ({ get: add(level)('GET'), post: add(level)('POST'), put: add(level)('PUT') })
   return router
 }
 

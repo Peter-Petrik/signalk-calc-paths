@@ -13,13 +13,21 @@
       <h1>Calculated Paths</h1>
       <p id="context" class="context"></p>
     </div>
-    <a class="settings-link" href="/admin/#/serverConfiguration/plugins/signalk-calc-paths">Edit entries</a>
+    <a class="settings-link" href="/admin/#/serverConfiguration/plugins/signalk-calc-paths">Edit plugin configuration</a>
   </header>
 
+  <nav id="views" class="views" aria-label="Views" hidden>
+    <a id="tab-status" href="#status" aria-current="page">Status</a>
+    <a id="tab-edit" href="#edit">Edit entries<span id="unsaved-mark" class="unsaved-mark" hidden> (unsaved)</span></a>
+  </nav>
+
   <main>
-    <div id="notices" aria-live="polite"></div>
-    <ol id="entries" class="entries" aria-label="Calculated paths"></ol>
-    <p id="placeholder" class="placeholder">Loading the calculated paths.</p>
+    <section id="status-view" aria-label="Status">
+      <div id="notices" aria-live="polite"></div>
+      <div id="sheet" class="sheet"></div>
+      <p id="placeholder" class="placeholder">Loading the calculated paths.</p>
+    </section>
+    <section id="edit-view" class="editor" aria-label="Edit entries" hidden></section>
   </main>
 
   <footer>
@@ -27,6 +35,9 @@
     <span id="version"></span>
   </footer>
 
+  <script src="common.js"></script>
+  <script src="status.js"></script>
+  <script src="editor.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

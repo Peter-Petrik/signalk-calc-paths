@@ -20,13 +20,18 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 - **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry.
 - **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
 - **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
-- **Status Page**: A page under **Webapps** lists every entry with its current value, its state and a reset button.
+- **Entry Editor (v0.3.0+)**: Entries are created and changed on the plugin's page under **Webapps**, with suggestions from the server's live paths, the current value and unit of each path, a live preview of a formula's result, and a note of which entries read each other's results. Saving restarts only the entries that changed; the others keep counting without interruption.
+- **Groups (v0.3.0+)**: Entries can be sorted into groups with names of the user's choosing, and ordered within them. The status page shows a heading per group, and each group can be folded away.
+- **Status Page**: A page under **Webapps** lists every entry with its current value, its state and a reset button. Paths named in its sentences are set in a code font.
 - **Reset Record (v0.2.1+)**: Each total records when and why it was last cleared: a new period, the followed path falling from one value to another, a request, or a change of time zone. The status page shows the record, together with the last change of the followed time zone and the time the plugin started.
 - **Clock Safety**: Sums are measured on a monotonic clock, and period resets pause while the system clock is recognisably unset, so a computer that boots at 1970 does not reset its totals or count the correction as elapsed time.
 
 ## Configuration
 
-Settings are entered under **Apps & Plugins > Configuration > Calculated Paths**. Entries are kept in three lists, one per calculation type.
+Configuration has two parts:
+
+1. **Settings** that apply to every entry (the time zone, the start of the day and week, the repeat interval) are entered under **Apps & Plugins > Configuration > Calculated Paths**. The **Edit plugin configuration** link at the top of the plugin's page opens them.
+2. **Entries** are created and changed under **Webapps > Calculated Paths > Edit entries**. See [Editing Entries](#editing-entries). Up to version 0.2.1 entries were kept in three lists in the settings; see [Upgrading From 0.2.x](#upgrading-from-02x).
 
 ### General Settings
 
@@ -40,11 +45,11 @@ Settings are entered under **Apps & Plugins > Configuration > Calculated Paths**
 | Week starts on | Monday | Monday, Sunday or Saturday. |
 | Repeat unchanged values every | 10 s | A result is published when it changes, at most once a second. An unchanged result is sent again at this interval. `0` publishes changes only. |
 
-### Settings Shared by All Entries
+### Fields Shared by All Entries
 
-| Setting | Default | Meaning |
+| Field | Default | Meaning |
 | :--- | :--- | :--- |
-| Enabled | on | A disabled entry publishes nothing and keeps its saved total. |
+| Switched on | on | An entry that is switched off publishes nothing and keeps its saved total. It may be saved unfinished. |
 | Name | empty | Label shown on the status page and published as the output's description. |
 | Output path | none | The Signal K path the result is published on. It needs at least two segments and must not be written by another source. |
 | Unit | empty | Unit published with the output. Signal K uses SI units: `W`, `J`, `V`, `A`, `s`, `m3`, `K`, `Pa`, `ratio`. |
@@ -53,7 +58,7 @@ Settings are entered under **Apps & Plugins > Configuration > Calculated Paths**
 
 ### Formulas
 
-| Setting | Meaning |
+| Field | Meaning |
 | :--- | :--- |
 | Inputs | A list of short names, each mapped to a path. A short name is made of letters, digits and underscores and starts with a letter. Paths cannot be written directly in an expression because they contain dots and dashes. |
 | Expression | The calculation, written with the short names. |
@@ -66,7 +71,7 @@ Assignment, function definitions, arrays, string concatenation and property acce
 
 ### Period Counters
 
-| Setting | Default | Meaning |
+| Field | Default | Meaning |
 | :--- | :--- | :--- |
 | Input path | none | The path of the running total. |
 | Resets | Every day | Every day, week, month or year; when another path resets; or only by hand. |
@@ -77,7 +82,7 @@ Assignment, function definitions, arrays, string concatenation and property acce
 
 ### Integrations
 
-| Setting | Default | Meaning |
+| Field | Default | Meaning |
 | :--- | :--- | :--- |
 | Input path | none | The path to add up. |
 | Add up | The value multiplied by time | Value multiplied by time gives the input's unit times seconds (`W` becomes `J`, `m3/s` becomes `m3`). The alternative adds up the time the value is above the threshold, in seconds. |
@@ -174,6 +179,61 @@ Switching **Time zone for day boundaries** to the fixed setting, or changing eit
 ### Seeing When the Zone Changed
 
 From version 0.2.1 the status page states the last change of the followed zone: when it happened, and from which zone to which. A change of the path the zone is read from, with the clock time unchanged, is stated as well, because a name carries daylight saving rules and a bare offset does not. The record is saved with the totals. A zone that changes although the vessel has not moved points at the plugin that publishes it; see item 5 under [Limitations and Assumptions](#limitations-and-assumptions).
+
+## Editing Entries
+
+From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculated Paths**, tab **Edit entries**. The tab appears for users who may change data (read/write or admin access); a read-only login sees the status only.
+
+### Building an Entry
+
+1. **Add entry**, at the foot of a group or of the entries outside any group, offers the three kinds, each explained in one line.
+2. Path fields suggest the paths the server knows on the vessel, including the outputs of other entries. Under each path field the current value and unit are shown, or a note that the path holds nothing, or holds something that cannot be calculated with, such as a position.
+3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet.
+4. An entry that reads another entry's result, or whose result another entry reads, says so, so a chain of entries can be followed.
+5. Fields that apply only to some settings, such as the threshold of an integration that adds up time, appear only when they apply.
+
+### Groups and Order
+
+1. **Add group** creates a group. Its name is edited in place, and the arrow buttons beside it move it up or down.
+2. An entry is moved into a group with its **Group** selector, or by dragging it by its handle onto another entry or onto a group's list. Dragging needs a mouse; on a touch screen the arrow buttons move an entry within its group.
+3. **Delete group** keeps the group's entries: they join the entries outside any group.
+4. On the status page the entries outside any group come first, without a heading, followed by the groups in their order. A set with no groups reads as one plain list. A group's heading folds it away; each browser remembers which groups are folded.
+5. Groups and order change only what is shown. They change no calculation, path or total.
+
+### Saving
+
+1. Nothing reaches the server until **Save**. The page warns before it is left with unsaved changes, and **Discard changes** returns to the set last saved.
+2. The set is checked on the server before anything is saved. An entry that is switched on and cannot run (a missing path, an expression that does not parse, two entries writing one path, entries that feed each other in a loop) stops the save, and the fault is shown at the entry. An entry that is switched off may be saved unfinished.
+3. When a save costs a total, the page lists what is lost and asks first: a counter or integration that is deleted, or whose output path, input path, direction, integration mode, threshold (when adding up time) or **Resets** setting changes. Other changes keep the total. Totals belong to output paths, so the comparison is made by output path: an entry that takes over an output, from an import for instance, continues its total.
+4. Saving restarts only the entries whose calculation changed. An entry that differs only in its name, unit or group, and every entry left alone, keeps running as it was, in the middle of whatever it was adding up, also when it reads the result of an entry that restarted. The page reports how many entries kept running and how many started. A restarted integration begins its next stretch at the save: the time since its input's last value, at most one sampling interval, is not added.
+5. A started entry is handed the latest value of each path it reads at once, so an entry on a path that is sent rarely, such as a switch state, does not wait for the path to speak again.
+6. If the entries were saved elsewhere since the editor read them, for instance from a second browser, the save is refused, and the page offers to reload or to export the changes first. A save must name the version of the entries it was based on; the HTTP interface refuses one that does not.
+
+### Import and Export
+
+**Export** downloads the set shown in the editor, with its groups, as `calculated-paths-entries.json`. **Import** reads such a file and replaces the set shown; nothing is saved until **Save**. A file can serve as a backup or carry a set to another server. Totals belong to output paths, so an imported entry continues a saved total on the same output path where it measures the same thing.
+
+## Upgrading From 0.2.x
+
+On its first start, version 0.3.0 moves the entries out of the plugin settings:
+
+1. The entries are written to `entries.json` in the plugin's data directory, in the order the status page showed them (formulas, then period counters, then integrations), without groups.
+2. The plugin settings as they were are kept as `settings-before-0.3.0.json` in the same directory.
+3. The three lists are removed from the plugin settings, which keep the time zone, day start, week start and repeat interval.
+4. Every total carries on: totals are kept by output path in `state.json`, which is unchanged.
+5. The status page says once that the entries were moved.
+
+Nothing needs to be done by hand. A later start moves nothing.
+
+**Going back to 0.2.1.** The copy restores the settings that version reads. On the server, with the plugin's data in the default place:
+
+```bash
+cp ~/.signalk/plugin-config-data/signalk-calc-paths/settings-before-0.3.0.json ~/.signalk/plugin-config-data/signalk-calc-paths.json
+```
+
+Then install version 0.2.1 and restart the server. `entries.json` is left in place and not read by 0.2.1. The totals of the entries in the copy carry on, because `state.json` is shared. Version 0.2.1 keeps only the totals of the entries it runs, so the totals of entries created under 0.3.0, or whose output path or calculation changed under 0.3.0, are deleted at its first save. To keep them for a return to 0.3.0, copy `state.json` aside before going back; restoring it later brings those totals back, but loses what 0.2.1 counted in between.
+
+**Forward again.** If the settings hold entries while `entries.json` exists, `entries.json` stays in charge: the entries in the settings are not used, and are kept as `settings-removed-<number>.json` and removed from the settings. Changes made under 0.2.1 are therefore not carried forward. To carry them forward instead, delete `entries.json` before starting 0.3.0, and the settings' entries are moved again.
 
 ## How the Calculations Behave
 
@@ -279,7 +339,7 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 ## Limitations and Assumptions
 
 1. An integration adds nothing while the server or the plugin is stopped. A period counter does not have this limit, because the source keeps the total.
-2. After a crash or power cut, up to 30 seconds of an integration's total can be lost: changed totals are written to disk every 30 seconds, on a clean stop and at every reset. While any total is changing, the state file is therefore rewritten every 30 seconds.
+2. Changed totals are written to disk every 30 seconds, when the plugin is stopped and at every reset. While any total is changing, the state file is therefore rewritten every 30 seconds. Up to 30 seconds of an integration's total can be lost at a crash, a power cut, and also a restart of the server: Signal K server 2.33 ends its process on a restart without stopping its plugins. Disabling the plugin, saving its settings and saving entries in the editor do stop it, or save, first.
 3. The first value an entry ever sees only sets its starting point. The first period after an entry is created is therefore partial; the status page shows when counting began.
 4. A period counter in a one-way mode counts every change of at least the smallest change. Sensor noise larger than that setting is counted as real change.
 5. A followed time zone is as good as its source. The plugin does not work out a zone from the position itself; it reads what another plugin publishes. A source that looks the zone up from old or coarse data can be wrong near borders and on the open ocean.
@@ -290,12 +350,14 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 10. Period resets depend on the system clock being correct. An unset clock is detected; a wrong but plausible one is not. See [System Clock](#system-clock).
 11. Units are neither checked nor converted. The unit entered is published as given, and a formula that mixes units must convert them itself.
 12. Only numbers and true/false values can be read. A field inside an object value cannot be selected.
-13. The plugin does not check whether another source already writes an output path. Two writers on one path give alternating values.
+13. The plugin does not stop an output path that another source already writes. Two writers on one path give alternating values. The editor warns when the server already holds a value on the path from another source.
 14. A formula is evaluated on every input value and published at most once a second. It does not average or smooth.
 15. "When another path resets" treats any fall of the followed value as a reset. The status page records the two values and the source of the lower one.
 16. Whether a value is an old one handed over again is judged partly by time stamps, and the time stamps of two sources need not share a clock. A source that first appears with a clock running behind the source being read loses its first value. An old value from a source the plugin has never seen, stamped later than the current one, is taken as new once. At start-up, where the server reports no value of its own for a path and two sources left values stamped by different clocks, the wrong one can be picked; the first live value then puts it right, at the cost of one false step. See [Input Values](#input-values).
 17. Published numbers are rounded to twelve significant digits.
 18. Node.js 22 or later is required.
+19. A total belongs to its output path. Renaming an output path in the editor starts the total from zero, and the old path keeps its last value in the server until the server restarts.
+20. The editor and its routes need read/write access. On servers that predate per-route access levels they need admin access.
 
 ## Prerequisites
 
@@ -308,20 +370,20 @@ An integration on a switch state such as `electrical.switches.inverter.state`, a
 
 1. Open the Signal K admin UI, navigate to **Apps & Plugins > Store** and install `signalk-calc-paths`.
 2. Restart the server when prompted.
-3. Go to **Apps & Plugins > Configuration > Calculated Paths**.
-4. Check the time zone. With a ship's time plugin installed nothing needs to be set. Otherwise pick a zone under **Time zone when none is published** if the server does not run on local time.
-5. Add an entry to **Formulas**, **Period counters** or **Integrations**, fill in its paths and unit, and enable the plugin.
-6. Click **Submit**.
-7. Open **Webapps > Calculated Paths** to see each entry's value and state, and the time zone in use.
-8. Check the new path under **Data > Browser**.
+3. Go to **Apps & Plugins > Configuration > Calculated Paths**, enable the plugin and check the time zone. With a ship's time plugin installed nothing needs to be set. Otherwise pick a zone under **Time zone when none is published** if the server does not run on local time.
+4. Click **Submit**.
+5. Open **Webapps > Calculated Paths** and the **Edit entries** tab.
+6. Click **Add entry**, choose a formula, a period counter or an integration, and fill in its paths and unit.
+7. Click **Save**.
+8. The **Status** tab shows each entry's value and state, and the time zone in use. Check the new path under **Data > Browser**.
 
 ## Technical Details
 
 ### Status Page and Access
 
-The status page is at `/signalk-calc-paths/`. With server security enabled, any logged-in user can view it, and resetting a total requires read/write or admin access. On servers that predate per-route access levels, both actions require admin access.
+The page is at `/signalk-calc-paths/`, with the status at `#status` and the editor at `#edit`. With server security enabled, any logged-in user can view the status; resetting a total and editing entries require read/write or admin access. On servers that predate per-route access levels, everything but viewing requires admin access.
 
-The page shows each value in an everyday unit (Wh or kWh for joules, hours and minutes for seconds, litres for small volumes) with the published SI value beneath it.
+The status shows each value in an everyday unit (Wh or kWh for joules, hours and minutes for seconds, litres for small volumes, knots for speeds, nautical miles from 1 nm up) with the published SI value beneath it.
 
 From version 0.2.1 the page also answers why a total reads what it reads:
 
@@ -337,18 +399,25 @@ From version 0.2.1 the page also answers why a total reads what it reads:
 | :--- | :--- | :--- |
 | `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration. |
+| `GET /plugins/signalk-calc-paths/api/config` | Read/write or admin | The groups and entries as saved, their revision, and the field definitions the editor builds its forms from. |
+| `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry, or 409 when the set was changed since that revision. |
+| `GET /plugins/signalk-calc-paths/api/paths` | Read/write or admin | Every path on the vessel with its current value and unit, for the editor's suggestions. |
+| `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. |
 
 The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
 
-### State File
+### Files
 
-Totals are kept in one file in the plugin's data directory:
+The entries and the totals are kept in the plugin's data directory:
 
 ```
+~/.signalk/plugin-config-data/signalk-calc-paths/entries.json
 ~/.signalk/plugin-config-data/signalk-calc-paths/state.json
 ```
 
-The file is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. It keeps no history and does not grow. Removing an entry from the configuration removes its record at the next save; disabling an entry keeps it. An entry's record is discarded when its output path, its input path, its direction, its integration mode or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
+`entries.json` holds the groups and entries as the editor saves them. A file that cannot be read is left exactly as it is and reported in the plugin status and on the page; no entry runs and no total is saved until a new set is saved in the editor. That save writes the new set in full first, then moves the old file aside as `entries.json.unreadable-<number>`. Signal K's own backup, under **Server > Backup/Restore**, includes the directory.
+
+`state.json` is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. It keeps no history and does not grow. Deleting an entry in the editor removes its record at the next save; switching an entry off keeps it. A record that no entry uses when the plugin starts, such as one left after a damaged `entries.json` was replaced by a smaller set, is kept for 30 days, so an entry with that output that comes back, typed in again or imported, continues its total; after that it is removed. An entry's record is discarded when its output path, its input path, its direction, its integration mode, its **Resets** setting or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
 
 To clear every total, stop the plugin, delete the file and start the plugin. A file that cannot be read is moved aside as `state.json.unreadable-<number>` and reported in the plugin status.
 
@@ -394,7 +463,13 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 **A daily total was cleared, or not cleared, when the boat changed time zone.** This follows the calendar date. See the examples under [When the Boat Changes Time Zone](#when-the-boat-changes-time-zone).
 
-**The status reports a configuration error.** One entry cannot run: a path is missing or malformed, an expression does not parse, two entries write the same path, or entries feed each other in a loop. The other entries keep running. The message names the entry.
+**The status reports a configuration error.** One entry cannot run: a path is missing or malformed, an expression does not parse, two entries write the same path, or entries feed each other in a loop. The other entries keep running. The message names the entry. From version 0.3.0 the editor refuses to save such an entry while it is switched on.
+
+**The Edit entries tab is missing.** The login may read data but not change it. Editing needs read/write or admin access.
+
+**The page says entries.json cannot be used.** The file was damaged or edited by hand into a form the plugin cannot read. It has been left as it is. Either repair it and restart the plugin, or build a set in the editor and save it, which keeps the damaged file beside the new one. A set exported earlier can be imported. Saved totals are kept: an entry with the same output path as before continues its total, and totals no entry uses are kept for 30 days.
+
+**The settings no longer show the formulas, counters and integrations.** From version 0.3.0 entries are edited on the plugin's page under **Webapps**; see [Upgrading From 0.2.x](#upgrading-from-02x).
 
 **A total is higher than expected on a tank or level.** Sensor ripple is being counted. Raise **Smallest change to count**.
 
@@ -416,12 +491,14 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 ## Screenshots
 
 ### Status Page
-![Status page](screenshots/webapp-status.png)
+![Status page with groups](screenshots/webapp-status.png)
 
-### Plugin Configuration
+### Entry Editor
+![Entry editor with groups](screenshots/webapp-editor.png)
+![A formula in the editor, with its live preview](screenshots/webapp-editor-formula.png)
+
+### Plugin Settings
 ![Time zone settings](screenshots/configuration-timezone.png)
-![Period counter settings](screenshots/configuration-counter.png)
-![Formula settings](screenshots/configuration-formula.png)
 
 ## License
 

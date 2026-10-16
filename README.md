@@ -22,7 +22,7 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 - **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
 - **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
 - **Entry Editor (v0.3.0+)**: Entries are created and changed on the plugin's page under **Webapps**, with suggestions from the server's live paths, the current value and unit of each path, a live preview of a formula's result, and a note of which entries read each other's results. Saving restarts only the entries that changed; the others keep counting without interruption.
-- **Groups (v0.3.0+)**: Entries can be sorted into groups with names of the user's choosing, and ordered within them. The status page shows a heading per group, and each group can be folded away.
+- **Groups (v0.3.0+)**: Entries can be sorted into groups with names of the user's choosing, and ordered within them. The status page shows a heading per group, and each group can be collapsed. From v0.4.2, **Expand all** and **Collapse all** act on every entry in the editor, on one group's entries, or on every group of the status page.
 - **Status Page**: A page under **Webapps** lists every entry with its current value, its state and a reset button. Paths named in its sentences are set in a code font.
 - **Reset Record (v0.2.1+)**: Each total records when and why it was last cleared: a new period, the followed path falling from one value to another, a request, or a change of time zone. The status page shows the record, together with the last change of the followed time zone and the time the plugin started.
 - **Clock Safety**: Sums are measured on a monotonic clock, and period resets pause while the system clock is recognisably unset, so a computer that boots at 1970 does not reset its totals or count the correction as elapsed time.
@@ -242,7 +242,7 @@ From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculat
 3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet.
 4. An entry that reads another entry's result, or whose result another entry reads, says so, so a chain of entries can be followed.
 5. Fields that apply only to some settings, such as the threshold of an integration that adds up time, appear only when they apply.
-6. On a narrow screen each field's explanation folds behind a **Help** button beside its title, and **Add group**, **Export** and **Import** fold behind **More**, so the bar at the top stays on one line.
+6. On a narrow screen each field's explanation is collapsed behind a **Help** button beside its title, and **Expand all**, **Add group**, **Export** and **Import** are collapsed behind **More**, so the bar at the top stays on one line.
 7. Removing an input moves the focus to the input now in its place. Escape, pressed while the focus is on a step that asks for confirmation (**Delete entry**, **Delete group**, **Discard changes**, the question before a save that costs a total, and **Reset to zero** or **Forget cycles** on the status page), cancels it.
 
 ### Units in the Editor
@@ -261,10 +261,11 @@ This applies to the threshold and swing of a cycles input, the threshold of an i
 ### Groups and Order
 
 1. **Add group** creates a group. Its name is edited in place, and the arrow buttons beside it move it up or down.
-2. An entry is moved into a group with its **Group** selector, or by dragging it by its handle onto another entry or onto a group's list. Dragging needs a mouse; on a touch screen the arrow buttons move an entry within its group.
-3. **Delete group** keeps the group's entries: they join the entries outside any group.
-4. On the status page the entries outside any group come first, without a heading, followed by the groups in their order. A set with no groups reads as one plain list. A group's heading folds it away; each browser remembers which groups are folded.
-5. Groups and order change only what is shown. They change no calculation, path or total.
+2. **Expand all** in the editing bar expands every entry, and **Expand all** beside a group's name expands that group's entries; while there are groups, the block of entries outside any group has one too. Each button turns into **Collapse all** once every entry it acts on is expanded.
+3. An entry is moved into a group with its **Group** selector, or by dragging it by its handle onto another entry or onto a group's list. Dragging needs a mouse; on a touch screen the arrow buttons move an entry within its group.
+4. **Delete group** keeps the group's entries: they join the entries outside any group.
+5. On the status page the entries outside any group come first, without a heading, followed by the groups in their order. A set with no groups reads as one plain list. A group's heading collapses it; each browser remembers which groups are collapsed. With two or more groups, a button above them expands every group while any is collapsed, and collapses them all once all are expanded; it is named after what it will do, **Expand all** or **Collapse all**. A browser that keeps no site data forgets collapsed groups when the page is left.
+6. Groups and order change only what is shown. They change no calculation, path or total.
 
 ### Saving
 

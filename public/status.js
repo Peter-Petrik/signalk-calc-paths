@@ -8,7 +8,7 @@
  * button for totals. Entries are shown in the groups set in the editor, in
  * the editor's order; entries outside any group come first, without a
  * heading, so a set with no groups reads as one plain list. A group can be
- * folded away, and each browser remembers which ones are.
+ * collapsed, and each browser remembers which ones are.
  */
 
 ;(function () {
@@ -26,6 +26,19 @@
   const context = document.getElementById('context')
   const refreshed = document.getElementById('refreshed')
   const version = document.getElementById('version')
+  const allToggle = document.getElementById('status-expand-all')
+
+  // The groups collapsed in this browser, by id. Held here, and remembered
+  // in the browser when it allows, under the key 'folded', the name used
+  // before 0.4.2, so that what a browser remembers carries on. A browser
+  // that keeps nothing still collapses groups until the page is left.
+  const collapsed = new Set(remembered.get('folded', []))
+  const collapsedGroups = () => new Set(collapsed)
+  const rememberCollapsed = (set) => {
+    collapsed.clear()
+    for (const id of set) collapsed.add(id)
+    remembered.set('folded', [...collapsed])
+  }
 
   // One record per entry on screen, keyed by the entry's unique key, so that
   // a refresh updates the existing line instead of rebuilding it. Rebuilding
@@ -360,11 +373,12 @@
         const count = element('span', 'group-count')
         toggle.append(label, count)
         toggle.addEventListener('click', () => {
-          const folded = new Set(remembered.get('folded', []))
-          if (folded.has(id)) folded.delete(id)
-          else folded.add(id)
-          remembered.set('folded', [...folded])
-          foldBlock(block, folded.has(id))
+          const collapsed = collapsedGroups()
+          if (collapsed.has(id)) collapsed.delete(id)
+          else collapsed.add(id)
+          rememberCollapsed(collapsed)
+          collapseBlock(block, collapsed.has(id))
+          updateAllToggle()
         })
         heading.append(toggle)
         section.append(heading)
@@ -380,12 +394,42 @@
     return block
   }
 
-  function foldBlock (block, folded) {
+  function collapseBlock (block, collapsed) {
     if (!block.toggle) return
-    block.toggle.setAttribute('aria-expanded', String(!folded))
-    block.list.hidden = folded
-    block.section.classList.toggle('is-folded', folded)
+    block.toggle.setAttribute('aria-expanded', String(!collapsed))
+    block.list.hidden = collapsed
+    block.section.classList.toggle('is-collapsed', collapsed)
   }
+
+  /**
+   * The Expand all / Collapse all button above the groups, shown while two
+   * or more groups are on the page; with one, its own heading does the same.
+   * As in the editor it is named after what it will do: it expands every
+   * group while any is collapsed, and collapses them all once all are
+   * expanded.
+   */
+  function updateAllToggle () {
+    const named = [...blocks.entries()].filter(([id, block]) => id !== '' && block.toggle && block.section.isConnected)
+    allToggle.hidden = named.length < 2
+    const anyCollapsed = named.some(([id]) => collapsed.has(id))
+    allToggle.textContent = anyCollapsed ? 'Expand all' : 'Collapse all'
+    allToggle.setAttribute('aria-label', anyCollapsed ? 'Expand all groups' : 'Collapse all groups')
+    allToggle.setAttribute('aria-controls', named.map(([, block]) => block.list.id).join(' '))
+    allToggle.dataset.expand = String(anyCollapsed)
+  }
+
+  allToggle.addEventListener('click', () => {
+    const expand = allToggle.dataset.expand === 'true'
+    const next = collapsedGroups()
+    for (const [id, block] of blocks) {
+      if (id === '' || !block.toggle) continue
+      if (expand) next.delete(id)
+      else next.add(id)
+      collapseBlock(block, !expand)
+    }
+    rememberCollapsed(next)
+    updateAllToggle()
+  })
 
   function notice (kind, text, link) {
     const box = element('p', `notice is-${kind}`, text)
@@ -417,6 +461,7 @@
     rows.clear()
     blocks.clear()
     sheet.replaceChildren()
+    updateAllToggle()
   }
 
   /** Puts a node at a place in a parent, moving it only when it is not there already. */
@@ -463,7 +508,6 @@
     // Blocks in the editor's order: the entries outside any group, then
     // each group that holds an entry. A line already in its place is left
     // alone: moving it would take keyboard focus away from a button in it.
-    const folded = new Set(remembered.get('folded', []))
     const shown = [['', null], ...groups.map((group) => [group.id, group])].filter(([id]) => byGroup.get(id).length > 0)
     for (const [id, block] of blocks) {
       if (!shown.some(([shownId]) => shownId === id)) {
@@ -477,11 +521,12 @@
       if (group) {
         block.label.textContent = group.name
         block.count.textContent = entries.length === 1 ? '1 entry' : `${entries.length} entries`
-        foldBlock(block, folded.has(id))
+        collapseBlock(block, collapsed.has(id))
       }
       place(sheet, block.section, index)
       entries.forEach((entry, position) => place(block.list, renderEntry(entry).item, position))
     })
+    updateAllToggle()
 
     if (data.entries.length === 0) {
       showPlaceholder('No entries yet. Add a formula, a period counter, an integration or a cycles entry in the editor.', { text: 'Open the editor', href: '#edit' })

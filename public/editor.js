@@ -410,7 +410,13 @@
     view.replaceChildren(toolbar, notices, blocks, list, units)
     updateToolbar()
     if (focus) {
-      const target = view.querySelector(focus)
+      // A selector built from an id in an imported file may not parse.
+      let target = null
+      try {
+        target = view.querySelector(focus)
+      } catch (err) {
+        target = null
+      }
       if (target) target.focus()
     }
   }
@@ -450,7 +456,7 @@
     const main = element('div', 'toolbar-main')
     const more = element('div', 'toolbar-more')
     more.id = 'toolbar-more'
-    more.append(addGroup, exportButton, importLabel)
+    more.append(expandButton(null), addGroup, exportButton, importLabel)
     // On a narrow screen the less frequent actions fold behind "More", so
     // the bar that stays at the top takes one line.
     const moreToggle = button('More', 'is-quiet toolbar-more-toggle', () => {
@@ -486,6 +492,51 @@
     discard.disabled = !state.dirty || state.sending
   }
 
+  /** The entries an Expand all / Collapse all button acts on: all, or a group's. */
+  function scopeEntries (scope) {
+    if (scope === null) return state.entries
+    return state.entries.filter((entry) => (entry.group || '') === scope)
+  }
+
+  /**
+   * An Expand all / Collapse all button for every entry (scope null) or for
+   * the entries of one group ('' for those outside any group). It is named
+   * after what it will do: it expands every entry while any is collapsed,
+   * and collapses them all once all are expanded.
+   */
+  function expandButton (scope, groupName) {
+    const control = button('', 'is-quiet expand-all', () => {
+      const expand = control.dataset.expand === 'true'
+      for (const entry of scopeEntries(scope)) {
+        if (expand) state.expanded.add(entry.id)
+        else state.expanded.delete(entry.id)
+      }
+      render(`[data-focus="${window.CSS.escape(control.dataset.focus)}"]`)
+    })
+    // The scope is kept on the element itself: a group id from an imported
+    // file may hold any character.
+    control.expandScope = scope
+    control.dataset.focus = scope === null ? 'expand-all' : `expand-group-${scope}`
+    // How the button's spoken name says where it acts.
+    control.dataset.where = scope === null ? '' : scope === '' ? ' outside the groups' : ` in ${groupName}`
+    labelExpandButton(control)
+    return control
+  }
+
+  function labelExpandButton (control) {
+    const entries = scopeEntries(control.expandScope)
+    const expand = entries.length === 0 || entries.some((entry) => !state.expanded.has(entry.id))
+    control.dataset.expand = String(expand)
+    control.textContent = expand ? 'Expand all' : 'Collapse all'
+    control.disabled = entries.length === 0
+    control.setAttribute('aria-label', `${expand ? 'Expand' : 'Collapse'} all entries${control.dataset.where}`)
+  }
+
+  /** Renames every Expand all / Collapse all button after a card opens or closes. */
+  function updateExpandButtons () {
+    for (const control of view.querySelectorAll('.expand-all')) labelExpandButton(control)
+  }
+
   /** One block: the entries outside any group (group null), or one group. */
   function renderBlock (group) {
     const id = group ? group.id : null
@@ -497,9 +548,12 @@
       name.value = group.name
       name.setAttribute('aria-label', 'Group name')
       name.dataset.groupName = group.id
+      const expandGroup = expandButton(group.id, group.name)
       name.addEventListener('input', () => {
         group.name = name.value
         markDirty()
+        expandGroup.dataset.where = ` in ${group.name}`
+        labelExpandButton(expandGroup)
       })
       const index = state.groups.indexOf(group)
       const up = button('↑', 'is-icon', () => moveGroup(group, -1), `Move group ${group.name} up`)
@@ -510,10 +564,16 @@
       down.disabled = index === state.groups.length - 1
       const remove = button('Delete group', 'is-quiet', () => confirmInline(remove, 'Delete group? Its entries stay, outside any group.', () => deleteGroup(group)))
       const tools = element('div', 'edit-group-tools')
-      tools.append(up, down, remove)
+      tools.append(expandGroup, up, down, remove)
       head.append(name, tools)
     } else {
       head.append(element('h2', 'edit-group-title', 'Not in a group'))
+      // Without groups the button in the editing bar does the same.
+      if (state.groups.length > 0) {
+        const tools = element('div', 'edit-group-tools')
+        tools.append(expandButton(''))
+        head.append(tools)
+      }
     }
     section.append(head)
 
@@ -583,6 +643,7 @@
       toggle.setAttribute('aria-expanded', String(open))
       body.hidden = !open
       if (open) refreshCard(entry.id)
+      updateExpandButtons()
     })
 
     const position = siblings.indexOf(entry)
@@ -1615,13 +1676,33 @@
     get dirty () { return state.dirty },
     async show () {
       visible = true
+      // The header (the time zone in use) and the footer (version, last
+      // update) are filled by the status, which otherwise refreshes only
+      // while its tab shows. They are kept current here on the editor's
+      // slower beat.
+      window.CalcPaths.status.refresh()
+      // Started before the first load, which it tries again while that
+      // fails, so a server that comes back is noticed.
+      if (!pathsTimer) {
+        pathsTimer = setInterval(async () => {
+          if (!visible) return
+          window.CalcPaths.status.refresh()
+          if (!state.loaded) {
+            if (await load()) {
+              await loadPaths()
+              render()
+            }
+            return
+          }
+          loadPaths()
+        }, PATHS_POLL_MS)
+      }
       if (!state.loaded) {
         showMessage('Loading the entries.')
         if (!(await load())) return
         await loadPaths()
         render()
       }
-      if (!pathsTimer) pathsTimer = setInterval(() => { if (visible) loadPaths() }, PATHS_POLL_MS)
     },
     hide () {
       visible = false

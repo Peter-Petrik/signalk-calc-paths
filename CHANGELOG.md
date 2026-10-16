@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-10-16
+
+### Added
+- **Expand All and Collapse All**: The editor has an **Expand all** button in its editing bar for every entry, and one beside each group's name for that group's entries; while there are groups, the block of entries outside any group has one too. The status page has one above its groups when there are two or more. Each button is named after what it will do: it expands everything in its scope while anything there is collapsed, and turns into **Collapse all** once all is expanded. On a phone the editor's button sits under **More**. The status page now keeps collapsed groups for as long as the page is open also in a browser that stores no site data; until now its groups expanded again at the next refresh there.
+
+### Changed
+- **Collapse Instead of Fold**: The page and the README say "collapse" and "expand" where they said "fold". What each browser remembers about collapsed status groups carries over.
+
+### Fixed
+- **Header and Footer Empty in the Editor**: Opened straight on **Edit entries**, the page left the line under its title (the time zone in use) and the footer (the time of the last update, the time the plugin started and its version) empty, because both were filled only by the status refresh, which runs while the Status tab shows. They are now filled when the page opens on either tab, and kept current every 10 seconds while the editor shows; an editor that could not reach the server at first tries again on the same beat. The fault dates from 0.3.0.
+
 ## [0.4.1] - 2026-10-15
 
 ### Added
@@ -99,6 +110,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.4.2]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.1...v0.3.0

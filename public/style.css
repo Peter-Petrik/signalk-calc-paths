@@ -388,6 +388,12 @@ code.path,
   margin-top: 1.5rem;
 }
 
+.sheet-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.25rem;
+}
+
 .group-heading {
   margin: 0 0 0.4rem;
   font-size: 1rem;
@@ -419,7 +425,7 @@ code.path,
   transition: transform 0.15s;
 }
 
-.group.is-folded .group-toggle::before {
+.group.is-collapsed .group-toggle::before {
   transform: rotate(-90deg);
 }
 
@@ -699,7 +705,7 @@ button.is-icon {
   gap: 0.5rem;
 }
 
-/* Shown on narrow screens only, where field help folds away. */
+/* Shown on narrow screens only, where field help is collapsed. */
 .help-toggle,
 .toolbar-more-toggle {
   display: none;
@@ -947,7 +953,7 @@ input[type="checkbox"] {
     padding-top: 1.25rem;
   }
 
-  /* Field help folds behind a Help button, so a card stays short. */
+  /* Field help is collapsed behind a Help button, so a card stays short. */
   .help-toggle {
     display: inline-block;
     min-height: 2.25rem;

@@ -4,6 +4,24 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-15
+
+### Added
+- **Units in the Editor**: The threshold and swing of a cycles input, the threshold of an integration that adds up time and the smallest change of a period counter are shown and entered in the unit the Signal K rules editor uses for the input path: °C for a temperature, % for a ratio such as humidity, hPa for a pressure, any other unit as published. The unit appears beside the field's title. Values are still kept in the unit Signal K publishes, so a humidity swing typed as `1` % is saved as `0.01`, and entries saved by 0.4.0 read unchanged.
+- **Current Value in the Shown Unit**: The hint under a path field gives the current value in the same unit, with the value as published beside it, for example "Now 62.5 % (0.625 ratio as published)". Under a formula's inputs the value as published leads, since a formula calculates with it. A number typed before the path's unit is known takes the unit shown once it is: `1` typed before a humidity path is chosen is 1 %.
+- **Every Fault at Its Field**: A refused save lists every fault of an entry, not only the first, and marks each field a fault lies in. A fault, and its mark, are dropped as soon as its field is changed. A smoothing too long is a fault only when an input is read as a wave, since the field is hidden otherwise. The save route also returns `entryFaults`, every fault with its field, beside `entryErrors`.
+- **Folding on Narrow Screens**: On a phone each field's explanation folds behind a **Help** button beside its title, and **Add group**, **Export** and **Import** fold behind **More**, so the editing bar that stays at the top takes one line instead of two.
+
+### Changed
+- **Entries Closed After Saving and Discarding**: A save closes every entry, except one the server reports a fault in and except when entries were changed while the save was on its way, and **Discard changes** closes them all. Open entries stayed open before, which left a long page after each save.
+- **Unsaved Changes Compared, Not Counted**: The editor reports unsaved changes only while the set differs from the saved one. An edit undone by hand, such as adding an input and removing it again, no longer leaves "Unsaved changes" behind.
+- **Larger Touch Targets**: On touch screens the "Edit plugin configuration" link, the **Switched on** check box and the group headings of the status page are larger.
+
+### Fixed
+- **New Group Out of Sight**: **Add group** focused the new group's name, which is added at the end of the page, without bringing it into view. The group is now scrolled to the middle of the screen with its name selected.
+- **Focus Lost on Removing an Input**: Removing an input of a formula or a cycles entry left the keyboard focus nowhere. It now moves to the input in its place, or to **Add input**.
+- **Escape Ignored in Confirmations**: Escape, pressed while the focus is on a step that asks for confirmation, now cancels it: in the editor **Delete entry**, **Delete group**, **Discard changes** and the question before a save that costs a total, and on the status page **Reset to zero** and **Forget cycles**.
+
 ## [0.4.0] - 2026-10-15
 
 ### Added
@@ -81,6 +99,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.4.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.2.0...v0.2.1

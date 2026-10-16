@@ -89,6 +89,29 @@
     }
   }
 
+  /**
+   * The unit a setting in a path's own unit is shown and typed in, as the
+   * Signal K rules editor shows them: kelvin as °C, ratios as %, pascals as
+   * hPa. The value is kept in the Signal K unit. A difference, such as a
+   * swing, has no offset: 0.3 K is 0.3 °C. Other units are shown as they
+   * are; `unit` is null when the path's unit is not known.
+   */
+  function shownUnit (units, difference) {
+    const clean = (value) => Number(value.toPrecision(12))
+    switch (units) {
+      case 'K':
+        return difference
+          ? { unit: '°C', show: (v) => v, store: (v) => v }
+          : { unit: '°C', show: (v) => clean(v - 273.15), store: (v) => clean(v + 273.15) }
+      case 'ratio':
+        return { unit: '%', show: (v) => clean(v * 100), store: (v) => clean(v / 100) }
+      case 'Pa':
+        return { unit: 'hPa', show: (v) => clean(v / 100), store: (v) => clean(v * 100) }
+      default:
+        return { unit: units || null, show: (v) => v, store: (v) => v }
+    }
+  }
+
   function escapeRegExp (text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
@@ -163,6 +186,7 @@
     button,
     element,
     everyday,
+    shownUnit,
     figure,
     remembered,
     writeWithPaths

@@ -332,3 +332,20 @@ test('the form for a saved zone outside the list holds that zone', () => {
   schemaFor('US/Eastern')
   assert.equal(schema.properties.timeZone.enum.length, base)
 })
+
+test('every fault of an entry is listed with its field, the first one stopping it', () => {
+  const doc = {
+    version: 1,
+    groups: [],
+    entries: [
+      { id: 'c', type: 'cycles', inputs: [{ path: 'a.b', kind: 'wave' }, { path: 'not a path', kind: 'onoff' }], window: 0, longest: 10, shortest: 20 },
+      { id: 'f', type: 'formula', output: 'x.y', inputs: [{ name: '1a', path: 'a.b' }, { name: 'b', path: '' }], expression: 'b +' }
+    ]
+  }
+  const [cycles, formula] = normalizeConfig({ timeZone: 'UTC' }, doc).entries
+  assert.deepEqual(cycles.faults.map((f) => f.field), ['output', 'inputs.0.swing', 'inputs.1.path', 'window', 'longest'])
+  assert.equal(cycles.error, 'no output path is set')
+  // The expression is not checked against short names that cannot be used.
+  assert.deepEqual(formula.faults.map((f) => f.field), ['inputs.0.name', 'inputs.1.path'])
+  assert.equal(formula.error, formula.faults[0].text)
+})

@@ -18,7 +18,7 @@
  */
 
 ;(function () {
-  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, api, button, element, everyday, figure } = window.CalcPaths
+  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, api, button, element, everyday, figure, shownUnit } = window.CalcPaths
 
   const view = document.getElementById('edit-view')
   const PATHS_POLL_MS = 10000
@@ -50,6 +50,12 @@
     dirty: false,
     // Faults from the last save attempt, by entry id.
     errors: Object.create(null),
+    // Every fault of each entry the last save refused, with its field.
+    faults: Object.create(null),
+    // The saved set as canonical JSON, to tell whether anything differs.
+    savedKey: null,
+    // Whether the "More" actions are unfolded on a narrow screen.
+    moreOpen: false,
     expanded: new Set(),
     paths: new Map(),
     pathsKey: '',
@@ -88,20 +94,44 @@
     return (entry.name && entry.name.trim()) || entry.output || `New ${TYPES[entry.type].label.toLowerCase()}`
   }
 
+  /** JSON with the keys of every object sorted, to compare two sets. */
+  function canonical (value) {
+    return JSON.stringify(value, (key, item) => item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]]))
+      : item)
+  }
+
+  /**
+   * Notes an edit. The set counts as unsaved only while it differs from the
+   * saved one, so an edit that is undone by hand leaves nothing to save.
+   */
   function markDirty () {
     state.changes++
-    if (!state.dirty) {
-      state.dirty = true
+    const dirty = canonical({ groups: state.groups, entries: state.entries }) !== state.savedKey
+    if (dirty !== state.dirty) {
+      state.dirty = dirty
       updateToolbar()
     }
-    window.CalcPaths.app.setUnsaved(true)
+    window.CalcPaths.app.setUnsaved(dirty)
+  }
+
+  /** Takes the faults of a save's answer: the first of each entry, and all. */
+  function takeFaults (answer) {
+    state.errors = Object.assign(Object.create(null), answer.entryErrors || {})
+    state.faults = Object.create(null)
+    for (const id of Object.keys(state.errors)) {
+      const list = answer.entryFaults && Array.isArray(answer.entryFaults[id]) ? answer.entryFaults[id] : null
+      state.faults[id] = list && list.length > 0 ? list : [{ field: null, text: state.errors[id] }]
+    }
   }
 
   /** The default value of every field of a type, as the field definitions give it. */
   function defaults (type) {
     const values = {}
     for (const [field, definition] of Object.entries(state.fields[type].properties)) {
-      if ('default' in definition && field !== 'inputs') values[field] = clone(definition.default)
+      // A setting in the unit of the input path is left empty: its default
+      // applies, and an empty field cannot be read as absolute zero.
+      if ('default' in definition && field !== 'inputs' && UNIT_FIELDS[type] !== field) values[field] = clone(definition.default)
     }
     return values
   }
@@ -132,13 +162,132 @@
   // ------------------------------------------------------------- paths
 
   /** What a path holds now, in a few words, for the hint under a path field. */
-  function describePath (path) {
+  // The units of the figures a cycles entry publishes (CYCLE_FIGURES in
+  // lib/config.js), for a path that is a cycles entry's output.
+  const CYCLE_UNITS = { onMedian: 's', offMedian: 's', periodMedian: 's', duty: 'ratio', lastOn: 's', cycles: '' }
+
+  // Settings given in the unit of the entry's input path.
+  const UNIT_FIELDS = { integration: 'threshold', counter: 'minStep' }
+
+  /** The unit of a path: as the server announces it, or as an entry publishes it. */
+  function unitsOf (path) {
+    if (!path) return null
+    const known = state.paths.get(path)
+    if (known && known.units) return known.units
+    const producer = state.entries.find((entry) => entry.output === path)
+    if (!producer) return null
+    if (producer.unit) return producer.unit
+    return producer.type === 'cycles' ? CYCLE_UNITS[producer.statistic || 'onMedian'] || null : null
+  }
+
+  /**
+   * A number box for a setting in the unit of a path, shown and typed in the
+   * unit the rules editor would show (°C, %, hPa) and kept in the Signal K
+   * unit. `onUnit` is told the unit shown whenever it is known anew.
+   */
+  function unitNumber (holder, field, fallback, pathOf, difference, onUnit) {
+    const control = element('input')
+    control.type = 'text'
+    control.inputMode = 'decimal'
+    let shown = null
+    let key
+    // Set once the value has been typed here. A typed number means what it
+    // says in the unit shown when it was typed; when the unit becomes known
+    // or changes after that, the number shown is kept and saved anew in the
+    // new unit, so "1" typed for a humidity is 1 %, not a ratio of 1.
+    let typed = false
+    // The text shown for the value as saved, and that value, so that typing
+    // the same text again restores it exactly, whatever the rounding.
+    let original = null
+    const numberIn = (value) => {
+      if (typeof value === 'number') return value
+      if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value)
+      return null
+    }
+    const show = () => {
+      const value = holder[field]
+      const number = numberIn(value)
+      control.value = value === undefined || value === null ? '' : number !== null ? String(shown.show(number)) : String(value)
+      original = { text: control.value, value }
+      // A default with an offset, such as 0 K, would read as -273.15 °C.
+      const offset = !difference && shown.show(0) !== 0
+      control.placeholder = typeof fallback === 'number' && !offset ? String(shown.show(fallback)) : ''
+    }
+    const store = () => {
+      const text = control.value.trim()
+      const number = Number(text)
+      if (original && text === original.text) holder[field] = original.value
+      else if (text === '') delete holder[field]
+      else holder[field] = Number.isFinite(number) ? shown.store(number) : text
+    }
+    const refresh = (force) => {
+      const units = unitsOf(pathOf())
+      if (!force && units === key) return
+      key = units
+      shown = shownUnit(units, difference)
+      onUnit(shown.unit)
+      if (typed) {
+        original = null
+        store()
+        markDirty()
+      } else if (document.activeElement !== control) {
+        show()
+      }
+    }
+    control.addEventListener('input', () => {
+      typed = true
+      store()
+      markDirty()
+    })
+    refresh(true)
+    return { control, refresh }
+  }
+
+  /** A field's title with a Help button that shows its help on a narrow screen. */
+  function fieldHead (label, wrap) {
+    const head = element('div', 'field-head')
+    const toggle = button('Help', 'is-quiet help-toggle', () => {
+      const open = !wrap.classList.contains('help-open')
+      wrap.classList.toggle('help-open', open)
+      toggle.setAttribute('aria-expanded', String(open))
+    })
+    toggle.setAttribute('aria-expanded', 'false')
+    toggle.setAttribute('aria-label', `Help for ${label.textContent}`)
+    head.append(label, toggle)
+    return head
+  }
+
+  /** Points each Help button at the help it shows. */
+  function linkHelp (item) {
+    let count = 0
+    for (const wrap of item.querySelectorAll('.field')) {
+      const toggle = wrap.querySelector('.help-toggle')
+      if (!toggle) continue
+      const ids = []
+      for (const help of wrap.querySelectorAll(':scope > .field-help')) {
+        help.id = help.id || `${item.dataset.id}-help-${count++}`
+        ids.push(help.id)
+      }
+      if (ids.length > 0) toggle.setAttribute('aria-controls', ids.join(' '))
+    }
+  }
+
+  /**
+   * What a path holds now. A setting in the path's unit is typed in the unit
+   * shown (°C, %, hPa), so that unit leads. A formula calculates with the
+   * value as published, so for its inputs the published unit leads.
+   */
+  function describePath (path, publishedFirst) {
     if (!path) return ''
     const known = state.paths.get(path)
     const producer = state.entries.find((entry) => entry.output === path)
     const from = producer ? ` Published by the entry "${entryLabel(producer)}".` : ''
     if (!known) return producer ? `Not published yet.${from}` : 'The server holds no value on this path at the moment.'
     if (known.value !== undefined) {
+      // In the unit settings for this path are typed in, as the rules
+      // editor shows it, with the value as published beside it.
+      const shown = typeof known.value === 'number' ? shownUnit(known.units, false) : null
+      if (shown && shown.unit && shown.unit !== known.units && !publishedFirst) return `Now ${figure(shown.show(known.value))} ${shown.unit} (${figure(known.value)} ${known.units} as published).${from}`
       const value = typeof known.value === 'boolean' ? (known.value ? 'true (counts as 1)' : 'false (counts as 0)') : `${figure(known.value)}${known.units ? ` ${known.units}` : ''}`
       const converted = typeof known.value === 'number' && known.units ? everyday(known.value, known.units, 'formula') : null
       const reading = converted ? ` (${converted.figure}${converted.unit ? ` ${converted.unit}` : ''})` : ''
@@ -196,6 +345,7 @@
     state.permitted = true
     const body = result.body
     state.saved = { groups: body.groups, entries: body.entries }
+    state.savedKey = canonical(state.saved)
     state.revision = body.revision
     state.blocked = body.blocked
     state.fields = body.fields
@@ -204,6 +354,7 @@
     state.entries = clone(body.entries)
     state.dirty = false
     state.errors = Object.create(null)
+    state.faults = Object.create(null)
     state.loaded = true
     window.CalcPaths.app.setUnsaved(false)
     return true
@@ -270,15 +421,22 @@
     status.id = 'editor-status'
     const save = button('Save', 'is-primary', () => saveAll())
     save.id = 'editor-save'
-    const discard = button('Discard changes', 'is-quiet', () => discardAll())
+    const discard = button('', 'is-quiet', () => discardAll())
+    discard.append(...twoLengths('Discard changes', 'Discard'))
     discard.id = 'editor-discard'
     const addGroup = button('Add group', '', () => {
+      state.moreOpen = false
       const group = { id: newId('g'), name: 'New group' }
       state.groups.push(group)
       markDirty()
       render(`[data-group-name="${group.id}"]`)
+      // The new group is added at the end of the page, which may be out of
+      // sight: it is brought to the middle, its name selected to type over.
       const field = view.querySelector(`[data-group-name="${group.id}"]`)
-      if (field) field.select()
+      if (field) {
+        field.closest('section').scrollIntoView({ block: 'center' })
+        field.select()
+      }
     })
     addGroup.id = 'editor-add-group'
     const exportButton = button('Export', 'is-quiet', exportSet)
@@ -290,11 +448,27 @@
     importInput.addEventListener('change', () => importSet(importInput))
     importLabel.append('Import', importInput)
     const main = element('div', 'toolbar-main')
-    main.append(save, discard, status)
     const more = element('div', 'toolbar-more')
+    more.id = 'toolbar-more'
     more.append(addGroup, exportButton, importLabel)
+    // On a narrow screen the less frequent actions fold behind "More", so
+    // the bar that stays at the top takes one line.
+    const moreToggle = button('More', 'is-quiet toolbar-more-toggle', () => {
+      state.moreOpen = !state.moreOpen
+      bar.classList.toggle('is-more-open', state.moreOpen)
+      moreToggle.setAttribute('aria-expanded', String(state.moreOpen))
+    })
+    moreToggle.setAttribute('aria-controls', 'toolbar-more')
+    moreToggle.setAttribute('aria-expanded', String(Boolean(state.moreOpen)))
+    if (state.moreOpen) bar.classList.add('is-more-open')
+    main.append(save, discard, status, moreToggle)
     bar.append(main, more)
     return bar
+  }
+
+  /** A text in a long and a short wording; a narrow screen shows the short. */
+  function twoLengths (long, short) {
+    return [element('span', 'long-text', long), element('span', 'short-text', short)]
   }
 
   function updateToolbar () {
@@ -302,7 +476,11 @@
     const save = document.getElementById('editor-save')
     const discard = document.getElementById('editor-discard')
     if (!status) return
-    status.textContent = state.sending ? 'Saving' : state.dirty ? 'Unsaved changes' : 'All changes saved'
+    const [long, short] = state.sending ? ['Saving', 'Saving'] : state.dirty ? ['Unsaved changes', 'Unsaved'] : ['All changes saved', 'Saved']
+    if (status.dataset.text !== long) {
+      status.dataset.text = long
+      status.replaceChildren(...twoLengths(long, short))
+    }
     status.classList.toggle('is-unsaved', state.dirty && !state.sending)
     save.disabled = !state.dirty || state.sending
     discard.disabled = !state.dirty || state.sending
@@ -418,14 +596,14 @@
     tools.append(up, down)
     head.append(handle, toggle, tools)
 
-    const error = element('p', 'card-error')
-    error.hidden = !state.errors[entry.id]
-    error.textContent = state.errors[entry.id] ? `Cannot run as set: ${state.errors[entry.id]}.` : ''
+    const error = element('div', 'card-error')
+    error.id = `faults-${entry.id}`
+    drawFaults(error, entry)
 
     const body = element('div', 'card-body')
     body.hidden = !expanded
     const form = element('div', 'card-form')
-    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], rows: new Map(), chain: null, preview: null, previewTimer: null }
+    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], unitFields: [], rows: new Map(), chain: null, preview: null, previewTimer: null }
     for (const field of orderedFields(entry.type)) form.append(renderField(entry, field, live))
     const chain = element('p', 'card-chain')
     live.chain = chain
@@ -454,10 +632,86 @@
     body.append(form, chain, footer)
 
     item.append(head, error, body)
+    markFaults(entry, item)
+    linkHelp(item)
+    // A marked field loses its mark, and its fault, once it is changed, so
+    // neither comes back when the page is drawn again. Taken before the
+    // field's own handler, which may mark the field again.
+    const unmark = (event) => {
+      const target = event.target
+      if (target && target.dataset && target.dataset.fault) {
+        const field = target.dataset.fault
+        delete target.dataset.fault
+        target.removeAttribute('aria-invalid')
+        target.removeAttribute('aria-describedby')
+        dropFaults(entry, live, (name) => name === field)
+      }
+    }
+    item.addEventListener('input', unmark, true)
+    item.addEventListener('change', unmark, true)
     addCardDrop(item, entry)
     state.cards.set(entry.id, live)
     refreshCard(entry.id)
     return item
+  }
+
+  /** The faults the last save found in an entry, all of them when several. */
+  function drawFaults (error, entry) {
+    const faults = state.faults[entry.id] || []
+    error.hidden = !state.errors[entry.id]
+    if (faults.length > 1) {
+      const list = element('ul')
+      for (const item of faults) list.append(element('li', '', `${item.text}.`))
+      error.replaceChildren(element('p', '', 'Cannot run as set:'), list)
+    } else {
+      error.textContent = state.errors[entry.id] ? `Cannot run as set: ${state.errors[entry.id]}.` : ''
+    }
+  }
+
+  /** The control a fault's field names, if the form has one for it. */
+  function faultControl (item, entry, field) {
+    if (!field) return null
+    const match = /^inputs\.(\d+)\.(\w+)$/.exec(field)
+    if (match) {
+      const row = item.querySelectorAll('.inputs > .input-row, .inputs > .cycle-input')[Number(match[1])]
+      if (!row) return null
+      if (match[2] === 'path') return row.querySelector('.input-path')
+      if (match[2] === 'name') return row.querySelector('.input-name')
+      return row.querySelector(`[data-setting="${match[2]}"]`)
+    }
+    return item.querySelector(`[id="f-${entry.id}-${field}"]`)
+  }
+
+  /**
+   * Forgets an entry's faults whose field passes `test`, once it has been
+   * changed, and redraws the list; the entry shows no fault once none is
+   * left. The faults of other fields stay until the next save.
+   */
+  function dropFaults (entry, live, test) {
+    const faults = state.faults[entry.id]
+    if (!faults) return
+    const left = faults.filter((fault) => !(fault.field && test(fault.field)))
+    if (left.length === faults.length) return
+    if (left.length === 0) {
+      delete state.faults[entry.id]
+      delete state.errors[entry.id]
+      live.error.closest('.card').classList.remove('has-error')
+    } else {
+      state.faults[entry.id] = left
+      state.errors[entry.id] = left[0].text
+    }
+    drawFaults(live.error, entry)
+  }
+
+  /** Marks each field a fault lies in, and ties it to the list of faults. */
+  function markFaults (entry, item) {
+    for (const fault of state.faults[entry.id] || []) {
+      const control = faultControl(item, entry, fault.field)
+      if (!control) continue
+      control.setAttribute('aria-invalid', 'true')
+      control.setAttribute('aria-describedby', `faults-${entry.id}`)
+      control.dataset.fault = fault.field
+    }
   }
 
   /** Draws one field of an entry's form. */
@@ -490,7 +744,7 @@
 
     const label = element('label', 'field-label', definition.title)
     label.htmlFor = fieldId
-    wrap.append(label)
+    wrap.append(definition.description ? fieldHead(label, wrap) : label)
     let control
     if (Array.isArray(definition.enum)) {
       control = element('select')
@@ -516,6 +770,13 @@
         markDirty()
         schedulePreview(entry, live)
       })
+    } else if (definition.type === 'number' && UNIT_FIELDS[entry.type] === field) {
+      // In the unit of the input path, shown as the rules editor shows it.
+      const number = unitNumber(entry, field, definition.default, () => entry.input, field === 'minStep', (unit) => {
+        label.textContent = `${definition.title} (${unit || 'in the input\'s unit'})`
+      })
+      live.unitFields.push(number)
+      control = number.control
     } else {
       control = element('input')
       control.type = 'text'
@@ -550,6 +811,7 @@
           refreshChains()
         }
         if (PATH_FIELDS.has(field)) refreshHint(live, field, entry[field])
+        if (field === 'input') for (const number of live.unitFields) number.refresh()
       })
     }
     control.id = fieldId
@@ -570,7 +832,7 @@
 
   /** The inputs of a formula: short names, each with its path. */
   function renderInputs (entry, definition, wrap, live) {
-    wrap.append(element('p', 'field-label', definition.title))
+    wrap.append(fieldHead(element('p', 'field-label', definition.title), wrap))
     const names = definition.items.properties.name
     const paths = definition.items.properties.path
     if (!Array.isArray(entry.inputs)) entry.inputs = []
@@ -606,16 +868,18 @@
           input.path = path.value.trim()
           markDirty()
           checkPath(path, 'input', input.path)
-          hint.textContent = describePath(input.path)
+          hint.textContent = describePath(input.path, true)
           refreshChains()
           schedulePreview(entry, live)
         })
-        hint.textContent = describePath(input.path)
-        live.inputHints.push({ hint, input })
+        hint.textContent = describePath(input.path, true)
+        live.inputHints.push({ hint, input, publishedFirst: true })
         const remove = button('Remove', 'is-quiet', () => {
           entry.inputs.splice(index, 1)
+          dropFaults(entry, live, (field) => /^inputs\./.test(field))
           markDirty()
           draw()
+          focusAfterRemove(table, add, index)
           refreshChains()
           schedulePreview(entry, live)
         }, `Remove input ${input.name || index + 1}`)
@@ -640,7 +904,7 @@
    * threshold or as a wave with a direction and a swing.
    */
   function renderCycleInputs (entry, definition, wrap, live) {
-    wrap.append(element('p', 'field-label', definition.title))
+    wrap.append(fieldHead(element('p', 'field-label', definition.title), wrap))
     const item = definition.items.properties
     if (!Array.isArray(entry.inputs)) entry.inputs = []
     const table = element('div', 'inputs')
@@ -652,8 +916,10 @@
     const draw = () => {
       table.replaceChildren()
       live.inputHints = []
+      live.unitFields = []
       entry.inputs.forEach((input, index) => {
         const number = index + 1
+        const rowUnits = []
         const row = element('div', 'cycle-input')
         const path = element('input', 'input-path is-path')
         path.type = 'text'
@@ -668,6 +934,7 @@
           input.path = path.value.trim()
           checkPath(path, 'input', input.path)
           hint.textContent = describePath(input.path)
+          for (const setting of rowUnits) setting.refresh()
           changed()
         })
         hint.textContent = describePath(input.path)
@@ -688,22 +955,21 @@
           label.append(element('span', '', title), control)
           return label
         }
-        const numberField = (field) => {
-          const control = element('input')
-          control.type = 'text'
-          control.inputMode = 'decimal'
-          control.value = input[field] === undefined || input[field] === null ? '' : String(input[field])
-          if (item[field].default !== undefined) control.placeholder = String(item[field].default)
-          control.addEventListener('input', () => {
-            const text = control.value.trim()
-            const value = Number(text)
-            if (text === '') delete input[field]
-            else input[field] = Number.isFinite(value) ? value : text
-            markDirty()
+        // The threshold and the swing are shown in the unit of the input's
+        // path, as the rules editor shows it, and kept in the Signal K unit.
+        const unitField = (field) => {
+          const caption = element('span', '', item[field].title)
+          const box = unitNumber(input, field, item[field].default, () => input.path, field === 'swing', (unit) => {
+            caption.textContent = `${item[field].title} (${unit || 'in the input\'s unit'})`
           })
-          return control
+          box.control.dataset.setting = field
+          rowUnits.push(box)
+          live.unitFields.push(box)
+          const label = element('label', 'cycle-input-setting')
+          label.append(caption, box.control)
+          return label
         }
-        const threshold = labelled(item.threshold.title, numberField('threshold'))
+        const threshold = unitField('threshold')
         const direction = element('select')
         item.direction.enum.forEach((value, i) => {
           const option = element('option', '', item.direction.enumNames[i])
@@ -716,7 +982,7 @@
           markDirty()
         })
         const directionLabel = labelled(item.direction.title, direction)
-        const swing = labelled(item.swing.title, numberField('swing'))
+        const swing = unitField('swing')
         const show = () => {
           const wave = (input.kind || item.kind.default) === 'wave'
           threshold.hidden = wave
@@ -733,7 +999,9 @@
 
         const remove = button('Remove', 'is-quiet', () => {
           entry.inputs.splice(index, 1)
+          dropFaults(entry, live, (field) => /^inputs\./.test(field))
           draw()
+          focusAfterRemove(table, add, index)
           changed()
         }, `Remove input ${number}`)
         row.append(path, remove, hint, settings)
@@ -756,6 +1024,13 @@
     }
     wrap.append(table, add, element('p', 'field-help', definition.description), help)
     return wrap
+  }
+
+  /** After an input is removed, focus goes to the input now in its place. */
+  function focusAfterRemove (table, add, index) {
+    const paths = table.querySelectorAll('.input-path')
+    const next = paths[Math.min(index, paths.length - 1)]
+    ;(next || add).focus()
   }
 
   /** A short name not used yet in a formula: a, b, c, ... */
@@ -790,7 +1065,8 @@
     const live = state.cards.get(id)
     if (!entry || !live) return
     for (const field of live.hints.keys()) refreshHint(live, field, entry[field])
-    for (const { hint, input } of live.inputHints) hint.textContent = describePath(input.path)
+    for (const { hint, input, publishedFirst } of live.inputHints) hint.textContent = describePath(input.path, publishedFirst)
+    for (const number of live.unitFields) number.refresh()
     refreshChain(entry, live)
     // The preview asks the server, so only open cards keep it current.
     if (entry.type === 'formula' && !live.body.hidden) schedulePreview(entry, live, 0)
@@ -873,6 +1149,12 @@
       trigger.focus()
     })
     box.append(yes, no)
+    // Escape cancels, as it would close a dialog.
+    box.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      no.click()
+    })
     holder.replaceChild(box, trigger)
     yes.focus()
   }
@@ -911,6 +1193,7 @@
     state.entries.splice(state.entries.indexOf(entry), 1)
     state.expanded.delete(entry.id)
     delete state.errors[entry.id]
+    delete state.faults[entry.id]
     markDirty()
     render(next ? `[data-focus="toggle-${next.id}"]` : '#editor-add-group')
   }
@@ -1128,6 +1411,12 @@
       render('#editor-save')
     })
     box.append(list, go, back)
+    // Escape goes back, as it would close a dialog.
+    box.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      back.click()
+    })
     state.notice = box
     render()
     go.focus()
@@ -1165,7 +1454,7 @@
       return
     }
     if (!result.ok) {
-      state.errors = Object.assign(Object.create(null), answer.entryErrors || {})
+      takeFaults(answer)
       for (const id of Object.keys(state.errors)) state.expanded.add(id)
       const lines = [answer.error || `The server answered ${result.status}. Nothing was saved.`, ...(answer.errors || [])]
       setNotice('error', lines.join(' '))
@@ -1176,17 +1465,18 @@
       }
       return
     }
-    state.errors = Object.assign(Object.create(null), answer.entryErrors || {})
+    takeFaults(answer)
     if (state.changes === changes) {
       // Nothing changed while the save was on its way: show the set as the
-      // server now holds it.
-      const expanded = new Set(state.expanded)
+      // server now holds it, with every card closed but those of entries
+      // the server reports a fault in.
       await load()
-      state.expanded = expanded
-      state.errors = Object.assign(Object.create(null), answer.entryErrors || {})
+      takeFaults(answer)
+      state.expanded = new Set(Object.keys(state.errors))
     } else {
       // Changes made meanwhile stay, unsaved, on top of what was saved.
       state.saved = sent
+      state.savedKey = canonical(sent)
       state.revision = answer.revision
     }
     const kept = answer.kept === 1 ? '1 entry kept running' : `${answer.kept} entries kept running`
@@ -1219,6 +1509,9 @@
       state.entries = clone(state.saved.entries)
       state.dirty = false
       state.errors = Object.create(null)
+      state.faults = Object.create(null)
+      // Back to the saved set, with every card closed, as after a save.
+      state.expanded.clear()
       state.notice = null
       window.CalcPaths.app.setUnsaved(false)
       render('#editor-add-group')
@@ -1299,6 +1592,7 @@
       const known = new Set(state.groups.map((g) => g.id))
       state.entries = data.entries.filter((e) => e && typeof e.id === 'string' && TYPES[e.type]).map((e) => ({ ...cleanEntry(e), group: known.has(e.group) ? e.group : null }))
       state.errors = Object.create(null)
+      state.faults = Object.create(null)
       state.expanded.clear()
       markDirty()
       const groups = state.groups.length === 1 ? '1 group' : `${state.groups.length} groups`

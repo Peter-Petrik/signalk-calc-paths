@@ -661,6 +661,15 @@ button.is-icon {
   font-size: 0.92rem;
 }
 
+.card-error p,
+.card-error ul {
+  margin: 0;
+}
+
+.card-error ul {
+  padding-left: 1.2rem;
+}
+
 .card-body {
   padding: 0.25rem 1.25rem 1.1rem 2.6rem;
   border-top: 1px dashed var(--rule);
@@ -681,6 +690,23 @@ button.is-icon {
   margin: 0 0 0.25rem;
   font-weight: 600;
   font-size: 0.92rem;
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Shown on narrow screens only, where field help folds away. */
+.help-toggle,
+.toolbar-more-toggle {
+  display: none;
+}
+
+.short-text {
+  display: none;
 }
 
 .field-check {
@@ -730,8 +756,11 @@ textarea {
   font-size: 0.88rem;
 }
 
-input[aria-invalid="true"] {
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
   border-color: var(--port);
+  box-shadow: 0 0 0 1px var(--port);
 }
 
 input[type="checkbox"] {
@@ -880,6 +909,33 @@ input[type="checkbox"] {
     display: none;
   }
 
+  /* Targets large enough for a finger. */
+  .settings-link {
+    display: inline-block;
+    padding: 0.6rem 0;
+    border-bottom: 0;
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+  }
+
+  .group-toggle {
+    min-height: 2.75rem;
+    align-items: center;
+  }
+
+  .field-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2.75rem;
+  }
+
+  input[type="checkbox"] {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+
   .card-body,
   .card-error {
     padding-left: 1rem;
@@ -889,6 +945,45 @@ input[type="checkbox"] {
 @media (max-width: 40rem) {
   .masthead {
     padding-top: 1.25rem;
+  }
+
+  /* Field help folds behind a Help button, so a card stays short. */
+  .help-toggle {
+    display: inline-block;
+    min-height: 2.25rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.82rem;
+  }
+
+  .field:not(.help-open) > .field-help {
+    display: none;
+  }
+
+  /* The bar that stays at the top keeps to one line; the rest is under More. */
+  .toolbar-main {
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+
+  .toolbar-more-toggle {
+    display: inline-block;
+    margin-left: auto;
+  }
+
+  .toolbar-main > * {
+    white-space: nowrap;
+  }
+
+  .long-text {
+    display: none;
+  }
+
+  .short-text {
+    display: inline;
+  }
+
+  .editor-toolbar:not(.is-more-open) .toolbar-more {
+    display: none;
   }
 
   .entry {

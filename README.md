@@ -79,7 +79,7 @@ Assignment, function definitions, arrays, string concatenation and property acce
 | Path to follow for resets | empty | Used with "When another path resets". The total is cleared whenever the value on this path falls. |
 | Count | Increases only | Increases only, decreases only, or net change (signed). |
 | When the input moves the other way | Carry on | Carry on counting from the new value, or wait until the previous level is passed again. Applies to the two one-way settings. |
-| Smallest change to count | 0 | Changes smaller than this, in the input's unit, are ignored until they add up to at least this much. |
+| Smallest change to count | 0 | Changes smaller than this are ignored until they add up to at least this much. Entered in the unit shown beside the field; see [Units in the Editor](#units-in-the-editor). |
 
 ### Integrations
 
@@ -87,7 +87,7 @@ Assignment, function definitions, arrays, string concatenation and property acce
 | :--- | :--- | :--- |
 | Input path | none | The path to add up. |
 | Add up | The value multiplied by time | Value multiplied by time gives the input's unit times seconds (`W` becomes `J`, `m3/s` becomes `m3`). The alternative adds up the time the value is above the threshold, in seconds. |
-| Threshold | 0 | Used when adding up time. Time counts while the input is greater than this. |
+| Threshold | 0 | Used when adding up time. Time counts while the input is greater than this. Entered in the unit shown beside the field; see [Units in the Editor](#units-in-the-editor). |
 | Resets, Path to follow for resets | Every day | As for period counters. |
 | When values stop for longer than the stale timeout | Leave the gap out | Leave the gap out of the total, or bridge it with the last value. |
 
@@ -99,9 +99,9 @@ A Cycles entry finds the ON and OFF stretches of a device that cycles and publis
 | :--- | :--- | :--- |
 | Inputs | none | One or more paths that show when the device runs. Each is read as on/off or as a wave, as set below. |
 | Read as | On/off | **On/off, against a threshold**: the input is ON while its value is greater than **ON above**. A switch sends true or false, which count as 1 and 0. **Wave**: the input rises and falls with the device without saying which state it is in; every stretch between two turning points is one ON or one OFF stretch. |
-| ON above | 0 | On/off inputs. In the input's own unit, for example `1` for a current in amperes. |
+| ON above | 0 | On/off inputs. In the unit shown beside it, for example `1` A for a current or `5` °C for a temperature. |
 | ON while the value is | Falling | Wave inputs. Falling for the temperature or humidity in a fridge or freezer, which drop while the compressor runs; rising for something a heater warms. |
-| Swing | none, required | Wave inputs. How far the value must turn back before a turning point counts, in the input's own unit as Signal K publishes it. See [Choosing the Swing](#choosing-the-swing). |
+| Swing | none, required | Wave inputs. How far the value must turn back before a turning point counts, in the unit shown beside it. See [Choosing the Swing](#choosing-the-swing). |
 | Combine inputs | All inputs ON (and) | With more than one input: ON while every input is ON, or while at least one is. See [Combining Inputs](#combining-inputs). |
 | Publish | Median ON time | Median ON time, median OFF time, median cycle (an ON stretch plus the OFF stretch after it), duty cycle (the share of time ON), last ON time, or number of cycles. Times are published in seconds, the duty cycle as a ratio from 0 to 1, the number of cycles as a plain number. |
 | Window | 24 hours | The figure is taken from the stretches that ended within this many hours. |
@@ -131,13 +131,13 @@ An input with nothing to say is left out, and the others decide alone: an input 
 
 #### Choosing the Swing
 
-The swing is in the unit Signal K publishes, which is not always the unit a display shows:
+The swing is entered in the unit the editor shows beside it, and kept in the unit Signal K publishes (see [Units in the Editor](#units-in-the-editor)):
 
-| Input | Unit in Signal K | A swing of |
+| Input | Entered as | Kept as |
 | :--- | :--- | :--- |
-| Temperature | kelvin (`K`) | `0.05` is 0.05 °C |
-| Relative humidity | ratio from 0 to 1 | `0.01` is one percentage point |
-| Current | amperes (`A`) | `0.5` is half an ampere |
+| Temperature | `0.05` °C | `0.05` K |
+| Relative humidity | `1` % | `0.01` (ratio) |
+| Current | `0.5` A | `0.5` A |
 
 Set it above the noise of the sensor and below the rise and fall of one cycle. Too small, and noise cuts stretches into pieces; too large, and cycles are missed. A third of the typical rise and fall of one cycle is a reasonable start. A history of the input in a database such as InfluxDB, viewed over an hour, shows both. Then compare the number of cycles on the status page with the graph.
 
@@ -237,11 +237,26 @@ From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculat
 
 ### Building an Entry
 
-1. **Add entry**, at the foot of a group or of the entries outside any group, offers the three kinds, each explained in one line.
+1. **Add entry**, at the foot of a group or of the entries outside any group, offers the four kinds, each explained in one line. **Add group** brings the new group into view with its name selected, ready to be typed over.
 2. Path fields suggest the paths the server knows on the vessel, including the outputs of other entries. Under each path field the current value and unit are shown, or a note that the path holds nothing, or holds something that cannot be calculated with, such as a position.
 3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet.
 4. An entry that reads another entry's result, or whose result another entry reads, says so, so a chain of entries can be followed.
 5. Fields that apply only to some settings, such as the threshold of an integration that adds up time, appear only when they apply.
+6. On a narrow screen each field's explanation folds behind a **Help** button beside its title, and **Add group**, **Export** and **Import** fold behind **More**, so the bar at the top stays on one line.
+7. Removing an input moves the focus to the input now in its place. Escape, pressed while the focus is on a step that asks for confirmation (**Delete entry**, **Delete group**, **Discard changes**, the question before a save that costs a total, and **Reset to zero** or **Forget cycles** on the status page), cancels it.
+
+### Units in the Editor
+
+From version 0.4.1 a setting given in the unit of an input path is shown and entered in the unit the Signal K rules editor uses for that path, and kept in the unit Signal K publishes:
+
+| Unit in Signal K | Shown and entered as | Example |
+| :--- | :--- | :--- |
+| `K` (temperature) | °C | A threshold of `5` °C is kept as `278.15`; a swing or smallest change of `0.05` °C is kept as `0.05`, since a difference has no offset. |
+| `ratio` (humidity, state of charge) | % | `1` % is kept as `0.01`. |
+| `Pa` (pressure) | hPa | `2` hPa is kept as `200`. |
+| Any other unit | as published | `0.5` A is kept as `0.5`. |
+
+This applies to the threshold and swing of a cycles input, the threshold of an integration that adds up time, and the smallest change of a period counter. The unit shown follows the input path, and appears beside the field's title as soon as the path is known; for a path that has no value or unit yet, the field says "in the input's unit". A number typed in such a field means what it says in the unit shown once it is known: `1` typed before a humidity path is chosen is 1 %. The hint under a path field shows the current value in the same unit, with the value as published beside it; under a formula's inputs the value as published leads, since a formula calculates with it. The entries file, an export and the HTTP interface hold the published unit, so entries saved by 0.4.0 read unchanged.
 
 ### Groups and Order
 
@@ -253,8 +268,8 @@ From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculat
 
 ### Saving
 
-1. Nothing reaches the server until **Save**. The page warns before it is left with unsaved changes, and **Discard changes** returns to the set last saved.
-2. The set is checked on the server before anything is saved. An entry that is switched on and cannot run (a missing path, an expression that does not parse, two entries writing one path, entries that feed each other in a loop) stops the save, and the fault is shown at the entry. An entry that is switched off may be saved unfinished.
+1. Nothing reaches the server until **Save**. The page warns before it is left with unsaved changes, and **Discard changes** returns to the set last saved, with every entry closed. Changes count as unsaved only while the set differs from the saved one, so an edit undone by hand leaves nothing to save.
+2. The set is checked on the server before anything is saved. An entry that is switched on and cannot run (a missing path, an expression that does not parse, two entries writing one path, entries that feed each other in a loop) stops the save. Every fault is listed at the entry and each field it lies in is marked; a mark clears as soon as the field is changed. An entry that is switched off may be saved unfinished. After a save every entry is closed, except one the server reports a fault in; entries changed while the save was on its way stay as they are.
 3. When a save costs a total, the page lists what is lost and asks first: a counter or integration that is deleted, or whose output path, input path, direction, integration mode, threshold (when adding up time) or **Resets** setting changes. Other changes keep the total. Totals belong to output paths, so the comparison is made by output path: an entry that takes over an output, from an import for instance, continues its total.
 4. Saving restarts only the entries whose calculation changed. An entry that differs only in its name, unit or group, and every entry left alone, keeps running as it was, in the middle of whatever it was adding up, also when it reads the result of an entry that restarted. The page reports how many entries kept running and how many started. A restarted integration begins its next stretch at the save: the time since its input's last value, at most one sampling interval, is not added.
 5. A started entry is handed the latest value of each path it reads at once, so an entry on a path that is sent rarely, such as a switch state, does not wait for the path to speak again.
@@ -410,12 +425,12 @@ Humidity is usually the clearer signal. A box's air holds little heat, so its hu
 
 | Field | Value |
 | :--- | :--- |
-| Inputs | `environment.inside.refrigerator.relativeHumidity`, read as a wave, ON while falling, swing `0.01` |
+| Inputs | `environment.inside.refrigerator.relativeHumidity`, read as a wave, ON while falling, swing `1` % |
 | Publish | Median ON time |
 | Window | 24 hours |
 | Output path | `environment.inside.refrigerator.compressor.onMedian` |
 
-Where the temperature also shows the cycles clearly, it can be added as a second input, read as a wave, ON while falling, with a swing such as `0.05`, and combined with "All inputs ON (and)", so that a stretch counts only when both agree. See [Combining Inputs](#combining-inputs) for how this shortens the stretches read.
+Where the temperature also shows the cycles clearly, it can be added as a second input, read as a wave, ON while falling, with a swing such as `0.05` °C, and combined with "All inputs ON (and)", so that a stretch counts only when both agree. See [Combining Inputs](#combining-inputs) for how this shortens the stretches read.
 
 The figure is published in seconds. A rules or automation plugin can then raise a notification when it passes a limit. To choose the limit:
 
@@ -430,7 +445,7 @@ As an example of what to expect, six weeks of one boat's recorded data, replayed
 | Fridge | 9.5 to 12 min | 14.5 to 19 min in the ten days before a defrost | 14 min |
 | Freezer | 6.5 to 8 min | 19 to 27 min in the month before a defrost | 15 min |
 
-The day after each defrost the figure fell back to the clean range. Loading provisions raised it by two to four minutes for a day or two, which stays below the limits. The freezer's temperature, with a swing of `0.05`, gave the same figures as its humidity; the fridge's temperature moved too little to be read reliably at any swing, and its humidity alone was used.
+The day after each defrost the figure fell back to the clean range. Loading provisions raised it by two to four minutes for a day or two, which stays below the limits. The freezer's temperature, with a swing of `0.05` °C, gave the same figures as its humidity; the fridge's temperature moved too little to be read reliably at any swing, and its humidity alone was used.
 
 ### Duty Cycle of a Pump
 
@@ -504,7 +519,7 @@ From version 0.2.1 the page also answers why a total reads what it reads:
 | `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration, or makes a cycles entry forget the cycles counted. |
 | `GET /plugins/signalk-calc-paths/api/config` | Read/write or admin | The groups and entries as saved, their revision, and the field definitions the editor builds its forms from. |
-| `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry, or 409 when the set was changed since that revision. |
+| `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry (`entryErrors`, the first of each; from 0.4.1 also `entryFaults`, every fault with the field it lies in), or 409 when the set was changed since that revision. |
 | `GET /plugins/signalk-calc-paths/api/paths` | Read/write or admin | Every path on the vessel with its current value and unit, for the editor's suggestions. |
 | `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. |
 
@@ -581,7 +596,7 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 **A cycles entry stays at "Waiting".** The message says how many of the cycles needed have been counted in the window, or that no complete cycle within the longest stretch has ended; for the second, raise **Longest stretch**. The first stretch after a start is never measured, and a wave input needs about a cycle and a half to find its first stretch, so with the defaults a figure appears after four to five cycles: about two hours for a fridge. If the count stays at zero while the device cycles, see the next item.
 
-**A cycles entry counts too few or too many cycles.** Compare the number of cycles on the status page with the device, or with a graph of the input. Too few: the swing is larger than the input's rise and fall, or the inputs combined with "All" rarely agree; lower the swing, or try each input on its own. Too many, with short stretches: the swing is within the sensor's noise; raise the swing or the smoothing. Remember that the swing is in Signal K's unit: kelvin for temperature, a ratio for humidity.
+**A cycles entry counts too few or too many cycles.** Compare the number of cycles on the status page with the device, or with a graph of the input. Too few: the swing is larger than the input's rise and fall, or the inputs combined with "All" rarely agree; lower the swing, or try each input on its own. Too many, with short stretches: the swing is within the sensor's noise; raise the swing or the smoothing. The unit of the swing is shown beside it, % for humidity and °C for temperature.
 
 ## Future Enhancements
 

@@ -889,15 +889,19 @@ module.exports = function (app) {
         return
       }
       const trial = normalizeConfig(settingsOptions, checked)
+      // entryErrors names each entry's first fault, entryFaults every fault
+      // with the field it lies in, for the editor to mark.
       const entryErrors = Object.create(null)
+      const entryFaults = Object.create(null)
       let refused = 0
       for (const entry of trial.entries) {
         if (!entry.error) continue
         entryErrors[entry.id] = entry.error
+        entryFaults[entry.id] = entry.faults
         if (entry.enabled) refused++
       }
       if (refused > 0) {
-        res.status(400).json({ error: `${refused === 1 ? 'One entry' : `${refused} entries`} cannot run as set. Nothing was saved.`, entryErrors })
+        res.status(400).json({ error: `${refused === 1 ? 'One entry' : `${refused} entries`} cannot run as set. Nothing was saved.`, entryErrors, entryFaults })
         return
       }
       let outcome
@@ -908,7 +912,7 @@ module.exports = function (app) {
         res.status(500).json({ error: `The entries could not be saved: ${err.message}` })
         return
       }
-      res.json({ saved: true, revision: revisionOf(doc), ...outcome, entryErrors })
+      res.json({ saved: true, revision: revisionOf(doc), ...outcome, entryErrors, entryFaults })
     }
 
     // Every path the server knows on this vessel, with its current value and

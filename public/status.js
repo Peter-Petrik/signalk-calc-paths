@@ -254,6 +254,14 @@
       const cancel = element('button', 'is-quiet', 'Cancel')
       cancel.type = 'button'
       cancel.addEventListener('click', () => setStage(row, entry, 'idle'))
+      // Escape cancels, as it would close a dialog.
+      for (const control of [confirm, cancel]) {
+        control.addEventListener('keydown', (event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          setStage(row, entry, 'idle')
+        })
+      }
       row.action.append(confirm, cancel)
       return
     }

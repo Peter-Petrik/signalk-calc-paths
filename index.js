@@ -786,6 +786,47 @@ module.exports = function (app) {
   }
 
   /**
+   * How old the value of a path is, in milliseconds, or null when that is
+   * not known. The plugin's own record of when it received the value comes
+   * first; for a path it does not read, the server's time stamp, which is
+   * set by the source's clock.
+   */
+  /**
+   * Why the preview counts an input as its value when stale, as the engine
+   * would: 'none' for a path that has had nothing, 'invalid' for one that
+   * holds no number, 'stale' for one older than the stale timeout, null to
+   * read it as it is. The output of an entry counts as what that entry
+   * sends: nothing before its first input since start, unless its saved
+   * total goes out; no number while it is not publishing or has no result.
+   */
+  function previewReason (path, raw, value, staleMs) {
+    const producer = engine && engine.byOutput.get(path)
+    if (producer) {
+      if (producer.inputMono === null && !engine.publishing(producer, monoNow())) return 'none'
+      if (value === null || !engine.publishing(producer, monoNow())) return 'invalid'
+    } else {
+      if (raw === undefined) return 'none'
+      if (value === null) return 'invalid'
+    }
+    const age = valueAge(path)
+    return staleMs > 0 && age !== null && age > staleMs ? 'stale' : null
+  }
+
+  function valueAge (path) {
+    const producer = engine && engine.byOutput.get(path)
+    if (producer) return producer.inputMono === null ? null : monoNow() - producer.inputMono
+    const last = engine && engine.lastExternal.get(path)
+    if (last) return monoNow() - last.mono
+    try {
+      const node = app.getSelfPath(path)
+      const stamp = node && typeof node === 'object' ? Date.parse(node.timestamp) : NaN
+      return Number.isFinite(stamp) ? Math.max(0, Date.now() - stamp) : null
+    } catch (err) {
+      return null
+    }
+  }
+
+  /**
    * HTTP interface under /plugins/signalk-calc-paths.
    *
    * Plugin routes are admin-only unless registered through router.access().
@@ -960,19 +1001,38 @@ module.exports = function (app) {
         res.json({ error: err.message })
         return
       }
+      // An input with a value for when it is stale is counted as that value
+      // as the running entry would count it: while its value is missing,
+      // not a number, or older than the stale timeout given.
+      // As in the entries file: left out or emptied means the default.
+      const stale = body.staleTimeout === null || body.staleTimeout === undefined || body.staleTimeout === '' ? NaN : Number(body.staleTimeout)
+      const staleMs = Number.isFinite(stale) && stale >= 0 ? stale * 1000 : 60000
       const values = {}
       const missing = []
+      const substituted = []
       for (const input of inputs) {
-        const value = toNumber(currentValue(input.path))
+        const whenStale = input.whenStale === null || input.whenStale === undefined || input.whenStale === '' ? NaN : Number(input.whenStale)
+        const raw = currentValue(input.path)
+        const value = toNumber(raw)
+        if (Number.isFinite(whenStale)) {
+          const reason = previewReason(input.path, raw, value, staleMs)
+          if (reason) {
+            values[input.name] = whenStale
+            substituted.push({ name: input.name, path: input.path, value: whenStale, reason })
+            continue
+          }
+        }
         if (value === null) missing.push(input.path)
         else values[input.name] = value
       }
+      // Named only when there are any, so the answer is as before otherwise.
+      const extra = substituted.length > 0 ? { substituted } : {}
       if (missing.length > 0) {
-        res.json({ missing })
+        res.json({ missing, ...extra })
         return
       }
       const value = compiled.evaluate(values)
-      res.json(value === null ? { error: 'The expression gives no finite number for the current values.' } : { value, values })
+      res.json(value === null ? { error: 'The expression gives no finite number for the current values.', ...extra } : { value, values, ...extra })
     }
 
     if (typeof router.access === 'function') {

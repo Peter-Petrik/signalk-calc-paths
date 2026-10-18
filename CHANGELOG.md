@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-19
+
+### Added
+- **Value When Stale for Formula Inputs**: Each input of a formula can be given a value that the formula uses while the input is stale, has had no value since the plugin started or the entry was last changed, or holds `null` or a value that is not a number, which is also what another entry it reads sends while that entry is not publishing. An input with such a value never makes the entry wait or go stale, so a device that leaves the bus, such as a shore charger at anchor, can count as `0` and a house load worked out from the sources keeps publishing. The switch happens at the stale timeout, also when no other input changes, and at once for a value the server held at start-up that is already older than that; the input's own value is used again as soon as one arrives. Inputs left empty behave as before. An entry whose inputs all have a value when stale always publishes; leaving one input without a value is how to make it stop when its devices are silent. The value is given in the unit Signal K publishes for the path and saved in the entries file only when set, so entries saved by earlier versions read unchanged.
+- **Editor**: Each formula input has a **Value when stale** box with the input's published unit beside it. A value that is not a number is refused on saving, and its box is marked. The live preview uses the values when stale for the inputs that are stale or have no value at the moment, takes the entry's stale timeout into account, and names the inputs it replaced.
+- **Status Page**: A formula names each input counted as its value when stale, with the value used and why: no value for longer than the stale timeout, no value since the plugin started or the entry was last changed, or no number at the moment. A result held while another input is stale keeps listing the inputs it was worked out with.
+- **HTTP Interface**: The preview route takes `whenStale` per input and the entry's `staleTimeout`, and answers with `substituted`, the inputs it replaced, when there are any. The status route reports `substituted`, `staleTimeout` and `edited` for each formula.
+
 ## [0.4.2] - 2026-10-16
 
 ### Added
@@ -110,6 +118,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.5.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.3.0...v0.4.0

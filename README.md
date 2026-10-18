@@ -11,7 +11,7 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 
 ## Features
 
-- **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`.
+- **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`. From v0.5.0 an input can be given a value when stale, used while the input is stale or has no value, so that a device that leaves the bus, such as a shore charger at anchor, counts as `0` instead of stopping the formula.
 - **Period Counters**: The change in a running total since the start of the day, week, month or year, or since a manual reset. Counting increases suits lifetime energy and engine run time; counting decreases turns a falling tank level into consumption.
 - **Integrations**: A rate added up over time (power into energy, flow into volume), or the time an input spends above a threshold (engine running time, time a switch is on).
 - **Cycles (v0.4.0+)**: The ON and OFF stretches of a device that cycles, found from a switch, from a value against a threshold, or from a value that rises and falls with the device, such as the temperature or humidity inside a fridge. Two or more inputs can be combined, ON while all of them are ON or while any of them is. The median ON time, median OFF time, median cycle, duty cycle, last ON time or number of cycles over a window such as 24 hours is published.
@@ -62,6 +62,7 @@ Configuration has two parts:
 | Field | Meaning |
 | :--- | :--- |
 | Inputs | A list of short names, each mapped to a path. A short name is made of letters, digits and underscores and starts with a letter. Paths cannot be written directly in an expression because they contain dots and dashes. |
+| Value when stale | Optional, per input (v0.5.0+). The value the formula uses for that input while the input is stale, has had no value since the plugin started or the entry was last changed, or holds `null` or something that is not a number. It is given in the unit Signal K publishes for the path, as the formula calculates with that. An input with such a value never makes the entry wait or go stale. Left empty, the input behaves as before. See [Stale Inputs](#stale-inputs). |
 | Expression | The calculation, written with the short names. |
 
 Operators: `+`, `-`, `*`, `/`, `%`, `^`, the comparisons `==`, `!=`, `<`, `<=`, `>`, `>=`, the logical `and`, `or`, `not`, and the condition `test ? a : b`. A comparison used as the whole expression publishes `1` or `0`. The constants `PI` and `E` are available.
@@ -239,7 +240,7 @@ From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculat
 
 1. **Add entry**, at the foot of a group or of the entries outside any group, offers the four kinds, each explained in one line. **Add group** brings the new group into view with its name selected, ready to be typed over.
 2. Path fields suggest the paths the server knows on the vessel, including the outputs of other entries. Under each path field the current value and unit are shown, or a note that the path holds nothing, or holds something that cannot be calculated with, such as a position.
-3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet.
+3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet. From 0.5.0 each input has a **Value when stale** box, with the input's published unit beside it; the result shown uses those values for inputs that are stale or have no value, and names them.
 4. An entry that reads another entry's result, or whose result another entry reads, says so, so a chain of entries can be followed.
 5. Fields that apply only to some settings, such as the threshold of an integration that adds up time, appear only when they apply.
 6. On a narrow screen each field's explanation is collapsed behind a **Help** button beside its title, and **Expand all**, **Add group**, **Export** and **Import** are collapsed behind **More**, so the bar at the top stays on one line.
@@ -256,7 +257,7 @@ From version 0.4.1 a setting given in the unit of an input path is shown and ent
 | `Pa` (pressure) | hPa | `2` hPa is kept as `200`. |
 | Any other unit | as published | `0.5` A is kept as `0.5`. |
 
-This applies to the threshold and swing of a cycles input, the threshold of an integration that adds up time, and the smallest change of a period counter. The unit shown follows the input path, and appears beside the field's title as soon as the path is known; for a path that has no value or unit yet, the field says "in the input's unit". A number typed in such a field means what it says in the unit shown once it is known: `1` typed before a humidity path is chosen is 1 %. The hint under a path field shows the current value in the same unit, with the value as published beside it; under a formula's inputs the value as published leads, since a formula calculates with it. The entries file, an export and the HTTP interface hold the published unit, so entries saved by 0.4.0 read unchanged.
+This applies to the threshold and swing of a cycles input, the threshold of an integration that adds up time, and the smallest change of a period counter. The unit shown follows the input path, and appears beside the field's title as soon as the path is known; for a path that has no value or unit yet, the field says "in the input's unit". A number typed in such a field means what it says in the unit shown once it is known: `1` typed before a humidity path is chosen is 1 %. The hint under a path field shows the current value in the same unit, with the value as published beside it; under a formula's inputs the value as published leads, since a formula calculates with it. The entries file, an export and the HTTP interface hold the published unit, so entries saved by 0.4.0 read unchanged. A formula input's value when stale is entered in the published unit, which is shown beside it, since the formula calculates with published values.
 
 ### Groups and Order
 
@@ -339,8 +340,8 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 ### Input Values
 
 1. Numbers are used as they are. `true` and `false` count as `1` and `0`.
-2. `null` means the source has no reading: a formula waits and publishes nothing, and an integration does not join the values on either side of it.
-3. Text, objects such as a position, and numbers that are not finite are treated the same way as `null`.
+2. `null` means the source has no reading: a formula waits and publishes nothing, and an integration does not join the values on either side of it. A formula input with a value when stale uses that value instead.
+3. Text, objects such as a position, and numbers that are not finite are treated the same way as `null`, also by a value when stale.
 4. Where several sources publish one path, the plugin receives the source the server's source priority prefers.
 5. Values that a source sends in one Signal K update are applied together, so a formula over two of them is calculated once, from both.
 6. The server keeps the last value of every source that ever wrote to a path, and can hand such a value over long after its source went quiet: all of them when the plugin starts, and single ones later. A device that once appeared under a different source name leaves that name's last value behind in this way. Read as a new value, it would look like a change that never happened: a period counter would add the difference, and a total that resets when a path falls would be cleared. From version 0.2.1 such values are kept out by two rules.
@@ -363,10 +364,15 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 
 ### Stale Inputs
 
-1. An entry whose input is older than its stale timeout is stale. A formula is stale when any one of its inputs is.
+1. An entry whose input is older than its stale timeout is stale. A formula is stale when any one of its inputs without a value when stale is.
 2. With "Stop publishing", a stale entry publishes nothing until the input returns.
-3. With "Keep publishing the last result", a stale entry goes on sending its last result. A formula is not recalculated while one of its inputs is stale, even if the others keep changing.
+3. With "Keep publishing the last result", a stale entry goes on sending its last result. A formula is not recalculated while one of its inputs without a value when stale is stale, even if the others keep changing.
 4. To the entries that read it, an entry that has stopped publishing, or a formula with no result, counts as having no value. An integration fed by such an entry stops adding and does not join the values on either side of the hole.
+5. From version 0.5.0 a formula input can have a value when stale. While that input is stale, has had no value since the plugin started, or holds a value that is not a number, the formula calculates with the value when stale instead, and the entry neither waits nor goes stale because of that input. The switch happens at the stale timeout, also when no other input changes, and the input's own value is used again as soon as one arrives. The other inputs work as before.
+6. An entry whose inputs all have a value when stale always publishes: with every device silent, it publishes the formula worked out from the values when stale alone. To make such an entry stop when its devices are silent, leave one input without a value when stale; that input then decides whether the entry waits or goes stale.
+7. The status page names each input counted as its value when stale at the moment, with the value used and the reason: no value for longer than the stale timeout, no value since the plugin started or the entry was last changed, or no number at the moment. An input that reads another entry has no number while that entry is not publishing or has no result.
+8. A value the server held at start-up that is already older than the stale timeout is counted as the value when stale at once.
+9. Integrations, period counters and cycles entries have no value when stale.
 
 ### System Clock
 
@@ -394,6 +400,10 @@ Some charge controllers publish their own daily yield and reset it at their own 
 ### A Total Across Devices With Different Units
 
 Not every source publishes SI units. A formula can convert while adding. With a calculated total in joules and two devices that report watt-hours: inputs `hardtop`, `port` and `starboard`, expression `hardtop + (port + starboard) * 3600`, unit `J`.
+
+### House Load With a Charger That Leaves the Bus
+
+A shore charger is often powered from the shore supply, and leaves the bus when that is switched off, at anchor. A formula that adds its power would then stop. The house load worked out from the sources and the battery, with inputs `solar` = `electrical.solar.hardtop.panelPower`, `v` = `electrical.chargers.shore.voltage`, `i` = `electrical.chargers.shore.current` and `bank` = `electrical.batteries.house.power`, and expression `solar + v * i - bank`, unit `W`, keeps working with a **Value when stale** of `0` on `v` and on `i`: while the charger is silent it counts as 0 W, and the status page reads "Counted as their value when stale: electrical.chargers.shore.voltage as 0 (no value for more than 1 min), electrical.chargers.shore.current as 0 (…)". `solar` and `bank` have no value when stale, so the entry still stops when the solar controller or the battery monitor goes quiet. The expression assumes a battery power that is positive while the battery charges; with the opposite sign, add it instead. An integration on the output adds up the house energy across both.
 
 ### Engine Hours Today
 
@@ -478,6 +488,7 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 20. The editor and its routes need read/write access. On servers that predate per-route access levels they need admin access.
 21. A Cycles entry measures what its inputs show, not the device. A temperature or humidity inside a box responds later than the compressor and is changed by the door and by what is loaded, so its stretches differ from the compressor's own. The figures suit a trend and an alert limit set on them, not a reading of the compressor's run time.
 22. A wave input is read in 30-second steps. A sensor that reports less often, up to about once a minute, leaves some steps empty, and the smoothing averages the steps there are. A pause longer than the stale timeout is a gap, which is why cycles entries default to a stale timeout of 180 seconds; a shorter one, such as 60 seconds for a sensor that reports once a minute, breaks the series at every late report.
+23. A value when stale is an assumption about a silent device. A charger that is running but has lost its connection to the bus counts as `0` all the same; the status page shows that the value when stale is in use.
 
 ## Prerequisites
 
@@ -517,12 +528,12 @@ From version 0.2.1 the page also answers why a total reads what it reads:
 
 | Request | Access | Result |
 | :--- | :--- | :--- |
-| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). |
+| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). From 0.5.0 a formula also reports `substituted`, the inputs counted as their value when stale, its `staleTimeout`, and `edited`, whether it was changed since the plugin started. |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration, or makes a cycles entry forget the cycles counted. |
 | `GET /plugins/signalk-calc-paths/api/config` | Read/write or admin | The groups and entries as saved, their revision, and the field definitions the editor builds its forms from. |
 | `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry (`entryErrors`, the first of each; from 0.4.1 also `entryFaults`, every fault with the field it lies in), or 409 when the set was changed since that revision. |
 | `GET /plugins/signalk-calc-paths/api/paths` | Read/write or admin | Every path on the vessel with its current value and unit, for the editor's suggestions. |
-| `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. |
+| `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. From 0.5.0 it takes each input's `whenStale` and the entry's `staleTimeout`, and lists in `substituted` the inputs it counted as their value when stale. |
 
 The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
 
@@ -606,7 +617,8 @@ These are not implemented.
 * **Previous-Period Values**: Publishing the finished total of the last period, such as yesterday's yield, on a second path.
 * **Fields Inside Object Values**: Reading one field of an object-valued path.
 * **Reset by Signal K PUT**: Resetting a total from another plugin or a phone shortcut.
-* **Averages and Extremes**: A fourth entry type for the mean, minimum or maximum over a period.
+* **Averages and Extremes**: A further entry type for the mean, minimum or maximum over a period.
+* **Value When Stale Beyond Formulas**: The per-input value when stale of formulas, for integrations, period counters and cycles entries.
 
 ## Support
 

@@ -250,5 +250,34 @@ test('the editor gets the paths with values and units, and a preview of a formul
   assert.deepEqual(preview({ inputs: [{ name: 'x', path: 'no.such' }], expression: 'x' }), { missing: ['no.such'] })
   assert.match(preview({ inputs: [], expression: 'y + 1' }).error, /"y", which is not an input/)
   assert.match(preview({ inputs: [{ name: 'i', path: 'el.current' }], expression: 'i / 0' }).error, /no finite number/)
+  // An input with a value when stale and no value on the server counts as
+  // that value; one with a value that is fresh is read as it is.
+  assert.deepEqual(preview({ inputs: [{ name: 'i', path: 'el.current', whenStale: 1 }, { name: 'c', path: 'el.charger', whenStale: 0 }], expression: 'i + c' }), {
+    value: 7.5,
+    values: { i: 7.5, c: 0 },
+    substituted: [{ name: 'c', path: 'el.charger', value: 0, reason: 'none' }]
+  })
+  // A path that holds something other than a number is 'invalid', as in
+  // the engine.
+  assert.deepEqual(preview({ inputs: [{ name: 'p', path: 'navigation.position', whenStale: 5 }], expression: 'p' }).substituted, [{ name: 'p', path: 'navigation.position', value: 5, reason: 'invalid' }])
+  plugin.stop()
+})
+
+test('the preview counts an input as its value when stale once the value is older than the stale timeout', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const old = new Date(Date.now() - 120000).toISOString()
+  const app = fakeApp({ 'el.charger': { value: 300, timestamp: old, meta: { units: 'W' } } })
+  const { plugin, route } = started(app)
+  plugin.start({ timeZone: 'UTC' })
+  const preview = (body) => call(route('POST /api/preview'), { body }).body
+  const inputs = [{ name: 'c', path: 'el.charger', whenStale: 0 }]
+  assert.deepEqual(preview({ inputs, expression: 'c', staleTimeout: 60 }).values, { c: 0 })
+  assert.deepEqual(preview({ inputs, expression: 'c', staleTimeout: 300 }).values, { c: 300 })
+  assert.deepEqual(preview({ inputs, expression: 'c', staleTimeout: 0 }).values, { c: 300 })
+  // A timeout left out or emptied is the default of 60 s, as in the entries
+  // file, not 0.
+  assert.deepEqual(preview({ inputs, expression: 'c', staleTimeout: null }).values, { c: 0 })
+  assert.deepEqual(preview({ inputs, expression: 'c', staleTimeout: '' }).values, { c: 0 })
+  assert.deepEqual(preview({ inputs, expression: 'c' }).values, { c: 0 })
   plugin.stop()
 })

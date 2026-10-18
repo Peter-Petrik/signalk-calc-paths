@@ -873,6 +873,7 @@
         }
         if (PATH_FIELDS.has(field)) refreshHint(live, field, entry[field])
         if (field === 'input') for (const number of live.unitFields) number.refresh()
+        if (field === 'staleTimeout' && entry.type === 'formula') schedulePreview(entry, live)
       })
     }
     control.id = fieldId
@@ -896,6 +897,7 @@
     wrap.append(fieldHead(element('p', 'field-label', definition.title), wrap))
     const names = definition.items.properties.name
     const paths = definition.items.properties.path
+    const whenStaleField = definition.items.properties.whenStale
     if (!Array.isArray(entry.inputs)) entry.inputs = []
     const table = element('div', 'inputs')
     const draw = () => {
@@ -934,7 +936,28 @@
           schedulePreview(entry, live)
         })
         hint.textContent = describePath(input.path, true)
-        live.inputHints.push({ hint, input, publishedFirst: true })
+        // The value used while the input is stale, has no value or no
+        // number, in the unit Signal K publishes for the path, as the
+        // formula calculates with it. Empty means none.
+        const stale = element('label', 'input-stale')
+        const staleBox = element('input')
+        staleBox.type = 'text'
+        staleBox.inputMode = 'decimal'
+        staleBox.placeholder = 'none'
+        staleBox.dataset.setting = 'whenStale'
+        staleBox.value = input.whenStale === undefined || input.whenStale === null ? '' : String(input.whenStale)
+        const staleUnit = element('span', 'input-stale-unit', unitsOf(input.path) || '')
+        staleBox.addEventListener('input', () => {
+          const text = staleBox.value.trim()
+          const number = Number(text)
+          if (text === '') delete input.whenStale
+          else input.whenStale = Number.isFinite(number) ? number : text
+          markDirty()
+          schedulePreview(entry, live)
+        })
+        stale.append(element('span', 'input-stale-title', whenStaleField ? whenStaleField.title : 'Value when stale'), staleBox, staleUnit)
+        path.addEventListener('input', () => { staleUnit.textContent = unitsOf(input.path) || '' })
+        live.inputHints.push({ hint, input, publishedFirst: true, unit: staleUnit })
         const remove = button('Remove', 'is-quiet', () => {
           entry.inputs.splice(index, 1)
           dropFaults(entry, live, (field) => /^inputs\./.test(field))
@@ -944,7 +967,7 @@
           refreshChains()
           schedulePreview(entry, live)
         }, `Remove input ${input.name || index + 1}`)
-        row.append(name, path, remove, hint)
+        row.append(name, path, remove, hint, stale)
         table.append(row)
       })
     }
@@ -957,6 +980,11 @@
       if (fields.length > 0) fields[fields.length - 1].focus()
     })
     wrap.append(table, add, element('p', 'field-help', `${names.description} ${paths.description}`))
+    if (whenStaleField) {
+      const line = element('p', 'field-help')
+      line.append(element('strong', '', `${whenStaleField.title}: `), whenStaleField.description)
+      wrap.append(line)
+    }
     return wrap
   }
 
@@ -1126,7 +1154,10 @@
     const live = state.cards.get(id)
     if (!entry || !live) return
     for (const field of live.hints.keys()) refreshHint(live, field, entry[field])
-    for (const { hint, input, publishedFirst } of live.inputHints) hint.textContent = describePath(input.path, publishedFirst)
+    for (const { hint, input, publishedFirst, unit } of live.inputHints) {
+      hint.textContent = describePath(input.path, publishedFirst)
+      if (unit) unit.textContent = unitsOf(input.path) || ''
+    }
     for (const number of live.unitFields) number.refresh()
     refreshChain(entry, live)
     // The preview asks the server, so only open cards keep it current.
@@ -1163,6 +1194,13 @@
   }
 
   /** Works the formula out on the current values, a moment after typing stops. */
+  /** Names the inputs a preview counted as their value when stale. */
+  function describeSubstituted (substituted) {
+    if (!Array.isArray(substituted) || substituted.length === 0) return ''
+    const why = { stale: 'stale', none: 'no value', invalid: 'no number now' }
+    return `. Counted as their value when stale: ${substituted.map((item) => `${item.name} as ${figure(item.value)} (${why[item.reason] || item.reason})`).join(', ')}.`
+  }
+
   function schedulePreview (entry, live, delay = PREVIEW_DELAY_MS) {
     if (!live.preview) return
     clearTimeout(live.previewTimer)
@@ -1174,7 +1212,7 @@
       }
       let result
       try {
-        result = await api('/preview', { method: 'POST', body: { inputs, expression: entry.expression } })
+        result = await api('/preview', { method: 'POST', body: { inputs, expression: entry.expression, staleTimeout: entry.staleTimeout } })
       } catch (err) {
         return
       }
@@ -1186,12 +1224,12 @@
         live.preview.textContent = `Not yet: ${body.error}.`
         live.preview.classList.add('is-error')
       } else if (body.missing) {
-        live.preview.textContent = `No result yet: no value on ${body.missing.join(', ')} at the moment.`
+        live.preview.textContent = `No result yet: no value on ${body.missing.join(', ')} at the moment.${describeSubstituted(body.substituted)}`
       } else {
         const unit = entry.unit ? ` ${entry.unit}` : ''
         const converted = entry.unit ? everyday(body.value, entry.unit, 'formula') : null
         const reading = converted ? ` (${converted.figure}${converted.unit ? ` ${converted.unit}` : ''})` : ''
-        live.preview.textContent = `With the current values: ${figure(body.value)}${unit}${reading}`
+        live.preview.textContent = `With the current values: ${figure(body.value)}${unit}${reading}${describeSubstituted(body.substituted)}`
         live.preview.classList.add('is-ok')
       }
     }, delay)
@@ -1620,7 +1658,12 @@
               const v = i[name]
               if (spec.type === 'number' ? (typeof v === 'number' && Number.isFinite(v)) || typeof v === 'string' : typeof v === 'string') kept[name] = v
             }
-            if (raw.type === 'formula') return { name: kept.name || '', path: kept.path || '' }
+            if (raw.type === 'formula') {
+              const formulaInput = { name: kept.name || '', path: kept.path || '' }
+              const whenStale = typeof kept.whenStale === 'string' ? kept.whenStale.trim() : kept.whenStale
+              if (whenStale !== undefined && whenStale !== '') formulaInput.whenStale = kept.whenStale
+              return formulaInput
+            }
             return kept
           })
         }

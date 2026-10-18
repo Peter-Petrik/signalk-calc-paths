@@ -795,6 +795,19 @@ input[type="checkbox"] {
   margin-top: 0;
 }
 
+.input-stale {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  font-size: 0.88rem;
+}
+
+.input-stale input {
+  width: 7rem;
+}
+
 .cycle-input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

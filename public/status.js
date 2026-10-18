@@ -198,9 +198,25 @@
     return `${how}${found}${now}${describeReset(entry.lastReset)}`
   }
 
+  /**
+   * The inputs a formula counts as their value when stale at the moment,
+   * each with the value and the reason, so that a silent device shows.
+   */
+  function describeSubstituted (entry) {
+    const substituted = entry.substituted || []
+    if (substituted.length === 0) return ''
+    const reasons = {
+      stale: `no value for more than ${duration(entry.staleTimeout)}`,
+      none: `no value since ${entry.edited ? 'the entry was last changed' : 'the plugin started'}`,
+      invalid: 'no number at the moment'
+    }
+    const items = substituted.map((input) => `${input.path} as ${input.value} (${reasons[input.reason] || input.reason})`)
+    return `. Counted as their value when stale: ${items.join(', ')}.`
+  }
+
   /** One sentence saying what kind of entry this is and how it behaves. */
   function describe (entry) {
-    if (entry.type === 'formula') return `Formula: ${entry.expression}`
+    if (entry.type === 'formula') return `Formula: ${entry.expression}${describeSubstituted(entry)}`
     if (entry.type === 'cycles') return describeCycles(entry)
     const kind = entry.type === 'counter' ? 'Period counter' : 'Integration'
     const reset = entry.resets === 'path' ? `resets when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]
@@ -336,7 +352,7 @@
 
   /** The paths an entry's sentence may name, to be set in a code font. */
   function pathsOf (entry) {
-    return [entry.output, entry.resetPath, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path)]
+    return [entry.output, entry.resetPath, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path), ...(entry.substituted || []).map((input) => input.path)]
   }
 
   function renderEntry (entry) {

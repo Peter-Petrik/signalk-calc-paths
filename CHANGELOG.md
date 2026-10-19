@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-19
+
+### Changed
+- **Null When an Entry Stops Publishing**: An entry that stops publishing now sends null once on its output path. Until now it only stopped sending, and the server went on serving its last result, so a reader that takes the latest value of a path without checking its age, such as a forecast that learns from it, kept using a figure that was no longer current. Null means "no reading", as it does on any input. It is sent for every reason an entry stops: a stale input with "Stop publishing"; a formula input with no reading or no number, or a formula with no finite result; a cycles entry whose figure drops out, for example after **Forget cycles**; and an edit that switches an entry off, deletes it or gives it another output path, which sends null on the path it published before. The result is sent again as soon as there is one. "Keep publishing the last result" still holds the last result through a stale input, and only then: a result withdrawn for any other reason sends null with either setting. Nothing is sent for a path the plugin has not published since it started, nor when the plugin stops, since the server removes the plugin's values itself. The status page adds "Null was sent on" and the path to the entry's message once null has gone out, also for an entry switched off. Checked against Signal K server 2.33.0 and 2.34.0: the server stores the null and serves it as `null` through its REST interface and to plugins that read the path with `getSelfPath()`.
+
+### Fixed
+- **Totals Lost on a Restart From the Admin UI**: A restart from the admin UI ends the server process without stopping its plugins, so up to 30 seconds of an integration's total could be lost. The plugin now also saves its totals as the process ends. From server 2.34.0 a stop by signal, such as `systemctl restart`, stops the plugins first, which saved already.
+- **Help for Value When Stale**: The field's help now says that the value is also used when the input has had no value since the entry was last changed, as the README and the status page do. The editor screenshot in the README shows the field.
+
 ## [0.5.0] - 2026-10-19
 
 ### Added
@@ -118,6 +127,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **HTTP Interface**: `GET /plugins/signalk-calc-paths/api/entries` returns every entry's status, and `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` clears one total. Reading is open to any logged-in user and resetting to read/write and admin users through the server's per-route access levels; on servers without that feature both routes stay admin-only. An OpenAPI description is registered with the server.
 - **Automated Tests**: A test suite covering period boundaries across time zones and daylight saving changes, formula parsing and its restrictions, every counter and integration mode, chained entries, restarts, clock faults, configuration checking, state storage and the plugin's interaction with the server API, plus an end-to-end check that runs against a live Signal K server in CI.
 
+[0.6.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Peter-Petrik/signalk-calc-paths/compare/v0.4.0...v0.4.1

@@ -1090,3 +1090,54 @@ test('a source seen before is read again when it sends something new, whatever i
   assert.equal(statusOf(plugin).outdatedValues.count, 1)
   plugin.stop()
 })
+
+test('the totals are saved when the process ends without stopping the plugin', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  t.after(() => plugin.stop())
+  const existing = new Set(process.listeners('exit'))
+  const before = existing.size
+  plugin.start(options)
+  const added = process.listeners('exit').filter((listener) => !existing.has(listener))
+  assert.equal(added.length, 1)
+  // It runs first, so a listener that throws cannot keep it from saving.
+  assert.equal(process.listeners('exit')[0], added[0])
+  app.send('el.yieldTotal', 1000)
+  app.send('el.yieldTotal', 1600)
+  const file = path.join(app.dataDir, 'state.json')
+  if (fs.existsSync(file)) fs.unlinkSync(file)
+  // What process.exit() runs, as on a restart from the admin UI.
+  added[0]()
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(saved.entries['el.yieldToday'].total, 600)
+  // Stopping removes the listener, and a second start adds only one.
+  plugin.stop()
+  assert.equal(process.listeners('exit').length, before)
+  plugin.start(options)
+  plugin.start(options)
+  assert.equal(process.listeners('exit').length, before + 1)
+  plugin.stop()
+})
+
+test('null goes out on the output path of an entry that stops sending', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] })
+  const app = fakeApp()
+  const plugin = createPlugin(app)
+  plugin.start(options)
+  app.send('el.current', 2)
+  app.send('el.voltage', 20)
+  t.mock.timers.tick(1000)
+  assert.equal(app.values()['el.power'], 40)
+  // A source with no reading withdraws the formula's result.
+  app.send('el.current', null)
+  t.mock.timers.tick(1000)
+  assert.ok(Object.hasOwn(app.values(), 'el.power'))
+  assert.equal(app.values()['el.power'], null)
+  // Stopping the plugin sends nothing: the server removes its values.
+  app.send('el.current', 2)
+  t.mock.timers.tick(1000)
+  const sent = app.messages.length
+  plugin.stop()
+  assert.equal(app.messages.length, sent)
+})

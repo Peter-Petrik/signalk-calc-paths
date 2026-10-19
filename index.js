@@ -81,6 +81,12 @@ module.exports = function (app) {
   let stateProblem = null
   let unsubscribes = []
   let tickTimer = null
+  // Saves the totals when the process ends without stopping the plugin
+  // first, as Signal K server does on a restart from its admin UI (it
+  // calls process.exit). Node runs 'exit' listeners synchronously, and the
+  // save is synchronous throughout, so it completes. Registered only while
+  // the plugin runs.
+  let exitListener = null
   let lastSaveMono = 0
   let ticksSinceZoneCheck = 0
   let lastStatus = null
@@ -204,9 +210,16 @@ module.exports = function (app) {
       }
       const publications = engine.tick(wallNow(), monoNow())
       if (publications.length > 0) {
-        app.handleMessage(PLUGIN_ID, {
-          updates: [{ values: publications.map(({ path, value }) => ({ path, value })) }]
-        })
+        try {
+          app.handleMessage(PLUGIN_ID, {
+            updates: [{ values: publications.map(({ path, value }) => ({ path, value })) }]
+          })
+        } catch (err) {
+          // A null is sent only once, so one that did not get out is marked
+          // as still owed; a number goes out again by itself.
+          for (const { path, value } of publications) if (value === null) engine.onServer.add(path)
+          throw err
+        }
       }
       reportStatus()
       if ((engine.dirty || zones.dirty) && monoNow() - lastSaveMono >= SAVE_INTERVAL_MS) save()
@@ -649,6 +662,17 @@ module.exports = function (app) {
     // the status, and saved totals that are to be published go out.
     tick()
     tickTimer = setInterval(tick, TICK_MS)
+    exitListener = () => {
+      try {
+        flushPending()
+      } catch (err) {
+        // The values not yet taken in are lost; the totals are still saved.
+      }
+      save()
+    }
+    // First in line: a listener of another plugin that throws stops every
+    // listener after it.
+    process.prependListener('exit', exitListener)
     reportStatus()
   }
 
@@ -748,6 +772,8 @@ module.exports = function (app) {
   plugin.stop = function () {
     if (tickTimer) clearInterval(tickTimer)
     tickTimer = null
+    if (exitListener) process.removeListener('exit', exitListener)
+    exitListener = null
     for (const unsubscribe of unsubscribes) {
       try {
         unsubscribe()
@@ -758,7 +784,8 @@ module.exports = function (app) {
     unsubscribes = []
     subscribedPaths = new Set()
     flushPending()
-    // Saving on the way out means a restart from the admin UI costs nothing.
+    // Saving on the way out: switching the plugin off, saving its settings,
+    // and from server 2.34.0 a stop by signal (systemctl), lose nothing.
     if (engine) save()
     engine = null
     normalized = null

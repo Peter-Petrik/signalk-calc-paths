@@ -16,7 +16,8 @@
  * edited set through the editor's route and verifies that the unchanged
  * entries keep running. It publishes a time zone on a followed path,
  * the way a ship's time plugin would, and verifies that the plugin takes it
- * up. Last it adds a cycles entry on a switch it toggles itself.
+ * up. Last it adds a cycles entry on a switch it toggles itself, and checks
+ * that an entry that stops sending leaves null on its output path.
  *
  * This file lives outside test/ on purpose: the Node.js test runner picks up
  * every file under a test directory, and this one needs a server.
@@ -253,6 +254,27 @@ async function main () {
   assert.equal(forgotten.cycles.count, 0)
   assert.equal(forgotten.lastReset.cause, 'request')
   console.log(`  cycles entry counted ${counted.cycles.count} cycles with a median ON time of ${counted.value} s, and forgot them on request`)
+
+  // With its cycles forgotten the entry has no figure, so it sends null,
+  // and the server serves null rather than the last median.
+  await eventually('null on the cycles output', async () => {
+    const node = await selfPath('calcPathsCheck.onMedian')
+    return node && node.value === null ? node : null
+  })
+  // An entry switched off in the editor sends null on its output too.
+  const latest = await getJson(`/plugins/${PLUGIN}/api/config`)
+  const switchedOff = latest.entries.map((entry) => (entry.output === 'calcPathsCheck.doubled' ? { ...entry, enabled: false } : entry))
+  const off = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: latest.revision, groups: latest.groups, entries: switchedOff })
+  })
+  assert.equal(off.status, 200, `switching an entry off answered ${off.status}`)
+  await eventually('null on the output of the entry switched off', async () => {
+    const node = await selfPath('calcPathsCheck.doubled')
+    return node && node.value === null ? node : null
+  })
+  console.log('  null is served on the output of an entry that stopped sending')
 
   // Leave the server as it was found.
   const current = await getJson(`/plugins/${PLUGIN}/api/config`)

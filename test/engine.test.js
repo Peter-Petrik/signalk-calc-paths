@@ -75,8 +75,11 @@ test('a stale input stops a formula, and it resumes when the input returns', () 
   assert.equal(h.tick(0).length, 1)
   // a.v keeps arriving; a.i goes quiet.
   for (let s = 10; s <= 60; s += 10) h.input(s, 'a.v', 10)
-  assert.deepEqual(h.tick(31), [])
+  // One null tells readers of the path that there is no result, and then
+  // nothing more is sent while the input stays away.
+  assert.deepEqual(h.tick(31), [{ path: 'a.p', value: null }])
   assert.equal(h.state('a.p', 31).state, 'stale')
+  assert.match(h.state('a.p', 31).message, /publishing is paused\. Null was sent on a\.p, so that readers do not see the last result\.$/)
   assert.deepEqual(h.tick(60), [])
   h.input(61, 'a.i', 4)
   assert.deepEqual(h.tick(61), [{ path: 'a.p', value: 40 }])
@@ -119,7 +122,7 @@ test('true and false count as 1 and 0; other non-numbers are ignored', () => {
   assert.deepEqual(h.tick(1), [{ path: 'sw.scaled', value: 0 }])
   // A null withdraws the input: the entry has nothing to calculate from.
   h.input(2, 'sw.state', null)
-  assert.deepEqual(h.tick(2), [])
+  assert.deepEqual(h.tick(2), [{ path: 'sw.scaled', value: null }])
   assert.equal(h.state('sw.scaled', 2).state, 'waiting')
   h.input(3, 'sw.state', { code: 3 })
   assert.deepEqual(h.tick(3), [])
@@ -302,8 +305,9 @@ test('a stale counter stops publishing and loses nothing over the gap', () => {
   h.input(0, 'm.total', 100)
   h.input(30, 'm.total', 110)
   h.tick(30)
-  assert.deepEqual(h.tick(100), [])
+  assert.deepEqual(h.tick(100), [{ path: 'm.today', value: null }])
   assert.equal(h.state('m.today', 100).state, 'stale')
+  assert.deepEqual(h.tick(200), [])
   // Ten minutes of silence, during which the source counted on.
   h.input(630, 'm.total', 190)
   assert.deepEqual(h.tick(630), [{ path: 'm.today', value: 90 }])
@@ -491,7 +495,8 @@ test('a stale source makes everything downstream stale too', () => {
   assert.equal(h.state('d.sum', 10).state, 'ok')
   assert.equal(h.state('d.double', 100).state, 'stale')
   assert.equal(h.state('d.sum', 100).state, 'stale')
-  assert.deepEqual(h.tick(100), [])
+  assert.deepEqual(h.tick(100), [{ path: 'd.double', value: null }, { path: 'd.sum', value: null }])
+  assert.deepEqual(h.tick(101), [])
 })
 
 // ------------------------------------------------------ restarts and storage

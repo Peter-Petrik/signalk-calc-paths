@@ -18,7 +18,7 @@ The plugin publishes calculated values into Signal K paths. It is not an automat
 - **Selectable Resets**: Each total resets at the start of a day, week, month or year, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
 - **Ship's Time Zone (v0.2.0+)**: Days begin at local midnight in the time zone the vessel keeps. The zone is read from Signal K, where a plugin such as Ship's Time publishes it, and changes by itself when the boat changes time zone. A zone chosen in the settings is used when nothing is published.
 - **Chaining**: An entry can read the output of another entry. A formula can feed an integration, and a counter can feed a formula. Entries are calculated in dependency order, each once per incoming update.
-- **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry.
+- **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry. From v0.6.0 an entry that stops publishing, for any reason, sends null once on its output path, so that the server does not go on serving its last result as if it were current.
 - **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
 - **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
 - **Entry Editor (v0.3.0+)**: Entries are created and changed on the plugin's page under **Webapps**, with suggestions from the server's live paths, the current value and unit of each path, a live preview of a formula's result, and a note of which entries read each other's results. Saving restarts only the entries that changed; the others keep counting without interruption.
@@ -55,7 +55,7 @@ Configuration has two parts:
 | Output path | none | The Signal K path the result is published on. It needs at least two segments and must not be written by another source. |
 | Unit | empty | Unit published with the output. Signal K uses SI units: `W`, `J`, `V`, `A`, `s`, `m3`, `K`, `Pa`, `ratio`. |
 | Stale timeout | 60 s | An input with no new value for this long is stale. `0` means the input is sent only when it changes and never goes stale. |
-| When an input is stale | Stop publishing | Stop publishing until the input returns, or keep publishing the last result. |
+| When an input is stale | Stop publishing | Stop publishing until the input returns, or keep publishing the last result. From v0.6.0 an entry that stops publishing sends null once on its output path; see [Stale Inputs](#stale-inputs). |
 
 ### Formulas
 
@@ -365,7 +365,7 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 ### Stale Inputs
 
 1. An entry whose input is older than its stale timeout is stale. A formula is stale when any one of its inputs without a value when stale is.
-2. With "Stop publishing", a stale entry publishes nothing until the input returns.
+2. With "Stop publishing", a stale entry sends null once on its output path (v0.6.0+), then nothing until the input returns, when its result is sent at once.
 3. With "Keep publishing the last result", a stale entry goes on sending its last result. A formula is not recalculated while one of its inputs without a value when stale is stale, even if the others keep changing.
 4. To the entries that read it, an entry that has stopped publishing, or a formula with no result, counts as having no value. An integration fed by such an entry stops adding and does not join the values on either side of the hole.
 5. From version 0.5.0 a formula input can have a value when stale. While that input is stale, has had no value since the plugin started, or holds a value that is not a number, the formula calculates with the value when stale instead, and the entry neither waits nor goes stale because of that input. The switch happens at the stale timeout, also when no other input changes, and the input's own value is used again as soon as one arrives. The other inputs work as before.
@@ -373,6 +373,10 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 7. The status page names each input counted as its value when stale at the moment, with the value used and the reason: no value for longer than the stale timeout, no value since the plugin started or the entry was last changed, or no number at the moment. An input that reads another entry has no number while that entry is not publishing or has no result.
 8. A value the server held at start-up that is already older than the stale timeout is counted as the value when stale at once.
 9. Integrations, period counters and cycles entries have no value when stale.
+10. **Null on the output path (v0.6.0+).** The server keeps the last value of a path until something replaces it. An entry that stops publishing would otherwise leave its last result there, and a reader that takes the latest value without checking its age would go on using it. So an entry that stops publishing, for whatever reason, sends one null on its output path, which means "no reading" as it does on any input (see [Input Values](#input-values)). The reasons are: a stale input with "Stop publishing"; a formula input with no reading or no number, or a formula with no finite result; a cycles entry whose figure drops out, for example after **Forget cycles** or while fewer cycles than needed are in the window; and an edit that switches the entry off, deletes it or gives it another output path, which sends null on the path it published before. The result is sent again as soon as there is one, and a later stop sends null again.
+11. "Keep publishing the last result" applies to a stale input only, as its name says: a result that is withdrawn for any other reason sends null with either setting.
+12. Nothing is sent for a path that the plugin has not published since it started, and nothing when the plugin itself stops: the server removes the plugin's values then. A database writer may skip null values; `signalk-to-influxdb2`, for one, stores no point for a null, so a chart shows a gap.
+13. The status page adds "Null was sent on" and the output path to the entry's message once null has gone out, also for an entry switched off.
 
 ### System Clock
 
@@ -467,7 +471,7 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 ## Limitations and Assumptions
 
 1. An integration adds nothing while the server or the plugin is stopped. A period counter does not have this limit, because the source keeps the total.
-2. Changed totals are written to disk every 30 seconds, when the plugin is stopped and at every reset. While any total is changing, the state file is therefore rewritten every 30 seconds. Up to 30 seconds of an integration's total can be lost at a crash, a power cut, and also a restart of the server: Signal K server 2.33 ends its process on a restart without stopping its plugins. Disabling the plugin, saving its settings and saving entries in the editor do stop it, or save, first.
+2. Changed totals are written to disk every 30 seconds, when the plugin is stopped, at every reset, and from version 0.6.0 when the server process ends without stopping the plugin. While any total is changing, the state file is therefore rewritten every 30 seconds. Disabling the plugin, saving its settings and saving entries in the editor stop it, or save, first. A restart from the admin UI ends the server process without stopping its plugins (Signal K server 2.34.0 still does), and the plugin saves as the process ends; from server 2.34.0 a stop by signal, such as `systemctl restart`, stops the plugins first. Up to 30 seconds of an integration's total can still be lost when the process is killed outright or runs out of memory, and at a power cut.
 3. The first value an entry ever sees only sets its starting point. The first period after an entry is created is therefore partial; the status page shows when counting began.
 4. A period counter in a one-way mode counts every change of at least the smallest change. Sensor noise larger than that setting is counted as real change.
 5. A followed time zone is as good as its source. The plugin does not work out a zone from the position itself; it reads what another plugin publishes. A source that looks the zone up from old or coarse data can be wrong near borders and on the open ocean.
@@ -484,7 +488,7 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 16. Whether a value is an old one handed over again is judged partly by time stamps, and the time stamps of two sources need not share a clock. A source that first appears with a clock running behind the source being read loses its first value. An old value from a source the plugin has never seen, stamped later than the current one, is taken as new once. At start-up, where the server reports no value of its own for a path and two sources left values stamped by different clocks, the wrong one can be picked; the first live value then puts it right, at the cost of one false step. See [Input Values](#input-values).
 17. Published numbers are rounded to twelve significant digits.
 18. Node.js 22 or later is required.
-19. A total belongs to its output path. Renaming an output path in the editor starts the total from zero, and the old path keeps its last value in the server until the server restarts.
+19. A total belongs to its output path. Renaming an output path in the editor starts the total from zero. From version 0.6.0 the old path is sent null, so it shows no reading rather than its last value; the server still lists the path until it restarts.
 20. The editor and its routes need read/write access. On servers that predate per-route access levels they need admin access.
 21. A Cycles entry measures what its inputs show, not the device. A temperature or humidity inside a box responds later than the compressor and is changed by the door and by what is loaded, so its stretches differ from the compressor's own. The figures suit a trend and an alert limit set on them, not a reading of the compressor's run time.
 22. A wave input is read in 30-second steps. A sensor that reports less often, up to about once a minute, leaves some steps empty, and the smoothing averages the steps there are. A pause longer than the stale timeout is a gap, which is why cycles entries default to a stale timeout of 180 seconds; a shorter one, such as 60 seconds for a sensor that reports once a minute, breaks the series at every late report.

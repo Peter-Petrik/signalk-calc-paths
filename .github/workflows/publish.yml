@@ -4,9 +4,19 @@
 #   1. Runs the test suite
 #   2. Extracts the matching version entry from CHANGELOG.md and adds a
 #      link to the comparison with the previous version's tag
-#   3. Creates a GitHub Release with those notes
-#   4. Publishes the package to the npm registry, unless that version
+#   3. Publishes the package to the npm registry, unless that version
 #      is already there
+#   4. Creates a GitHub Release with those notes
+#
+# The Release comes last, so that a publish that fails leaves no Release
+# announcing a version that cannot be installed. Running the workflow
+# again for the same tag then publishes, or skips the publish once the
+# version is on npm, and creates the Release.
+#
+# Every action is pinned to the full commit SHA of a release, with the
+# release named in a comment. A tag can be moved to other code by whoever
+# controls the action's repository; a commit SHA cannot, and this job holds
+# the right to publish to npm and to write to the repository.
 #
 # Authentication:
 #   - npm: Trusted Publishing (OIDC) — no stored secrets or tokens required.
@@ -26,6 +36,9 @@ on:
     tags:
       - 'v*'
 
+# Nothing by default; the job below asks for what it needs.
+permissions: {}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -40,25 +53,32 @@ jobs:
     steps:
       # The full history and all tags are fetched so that the previous
       # version's tag can be found for the "Full changelog" link. The
-      # default is a single commit with no tags.
+      # default is a single commit with no tags. The token is not kept in
+      # the git configuration: no step pushes, and the Release step is
+      # given its token by the action itself.
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # npm's documentation states that Trusted Publishing requires
       # Node 22.14.0 or later and npm 11.5.1 or later.
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       # Upgrading npm removes the dependence on whichever npm version the
-      # runner's Node.js happens to bundle. An npm too old for the OIDC
-      # handshake fails with a misleading "Access token expired" / 404 error.
+      # runner's Node.js happens to bundle: Node.js 24.0.0 came with npm
+      # 11.3.0, too old for Trusted Publishing. An npm too old for
+      # the OIDC handshake fails with a misleading "Access token expired" /
+      # 404 error. The major version is fixed, so that a new major release
+      # of npm with changed behaviour cannot reach a publish unseen; any
+      # npm 11 from 11.5.1 on does Trusted Publishing.
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
@@ -112,18 +132,13 @@ jobs:
             echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREVIOUS}...${GITHUB_REF_NAME}" >> release_notes.md
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          body_path: release_notes.md
-          name: ${{ github.ref_name }}
-
       # npm refuses to publish a name and version that already exist. The
       # first version of a package has to be published by hand, because a
       # trusted publisher can only be added to a package that is already on
       # the registry. This check lets the tag for such a version still
       # produce its GitHub Release without failing at the publish step, and
-      # makes re-running the workflow for a published tag harmless.
+      # makes re-running the workflow for a published tag harmless, which is
+      # how a Release that failed after the publish is made.
       - name: Check whether this version is already on npm
         id: registry
         run: |
@@ -140,3 +155,10 @@ jobs:
       - name: Publish to npm with provenance
         if: steps.registry.outputs.published != 'true'
         run: npm publish --provenance --access public
+
+      # Only once the package is on npm, or was already there.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          body_path: release_notes.md
+          name: ${{ github.ref_name }}

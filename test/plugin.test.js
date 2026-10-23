@@ -81,9 +81,9 @@ function fakeRouter (withAccess = true) {
   return router
 }
 
-function call (handler, params = {}) {
+function call (handler, params = {}, headers = {}) {
   const response = { statusCode: 200, body: null }
-  handler({ params }, {
+  handler({ params, headers }, {
     status (code) { response.statusCode = code; return this },
     json (body) { response.body = body }
   })
@@ -296,8 +296,10 @@ test('the reset route clears one total and saves at once', (t) => {
   const plugin = createPlugin(app)
   const router = fakeRouter()
   plugin.registerWithRouter(router)
-  const reset = router.routes['POST /api/entries/:id/reset'].handler
-  assert.equal(call(reset, { id: 'el.yieldToday' }).statusCode, 503)
+  // The page sends its reset as JSON; see the tests of version 0.7.0.
+  const handler = router.routes['POST /api/entries/:id/reset'].handler
+  const reset = (params) => call(handler, params, { 'content-type': 'application/json' })
+  assert.equal(reset({ id: 'el.yieldToday' }).statusCode, 503)
 
   plugin.start(options)
   app.send('el.yieldTotal', 1000)
@@ -305,9 +307,9 @@ test('the reset route clears one total and saves at once', (t) => {
   t.mock.timers.tick(1000)
   assert.equal(app.values()['el.yieldToday'], 600)
 
-  assert.equal(call(reset, { id: 'el.power' }).statusCode, 404)
-  assert.equal(call(reset, { id: 'no.such.entry' }).statusCode, 404)
-  assert.deepEqual(call(reset, { id: 'el.yieldToday' }), { statusCode: 200, body: { reset: 'el.yieldToday' } })
+  assert.equal(reset({ id: 'el.power' }).statusCode, 404)
+  assert.equal(reset({ id: 'no.such.entry' }).statusCode, 404)
+  assert.deepEqual(reset({ id: 'el.yieldToday' }), { statusCode: 200, body: { reset: 'el.yieldToday' } })
   const saved = JSON.parse(fs.readFileSync(path.join(app.dataDir, 'state.json'), 'utf8'))
   assert.equal(saved.entries['el.yieldToday'].total, 0)
 

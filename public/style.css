@@ -17,7 +17,7 @@
   --shoal: #0d5c7d;
   --shoal-wash: #e3eff3;
   --starboard: #1a7a52;
-  --caution: #a8650a;
+  --caution: #985a08;
   --port: #b3261e;
   --focus: #0d5c7d;
 
@@ -256,6 +256,18 @@ label.file-button:focus-within {
 .entry.is-disabled .entry-name,
 .entry.is-disabled .entry-state {
   color: var(--ink-soft);
+}
+
+/*
+ * While no answer comes, the readings and states are dimmed: set in the
+ * soft ink and a lighter weight, which keeps them readable. The notice
+ * above the list says why in words.
+ */
+.sheet.is-offline .reading-figure,
+.sheet.is-offline .reading-unit,
+.sheet.is-offline .entry-state {
+  color: var(--ink-soft);
+  font-weight: 400;
 }
 
 .entry-action {
@@ -749,6 +761,19 @@ button.is-icon {
 
 .field-hint {
   color: var(--ink);
+}
+
+.field-warning {
+  margin: 0.3rem 0 0;
+  padding-left: 0.6rem;
+  border-left: 3px solid var(--caution);
+  font-size: 0.82rem;
+  color: var(--ink);
+  max-width: 70ch;
+}
+
+.field-warning[hidden] {
+  display: none;
 }
 
 .field-preview.is-ok {

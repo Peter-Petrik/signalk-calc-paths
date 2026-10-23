@@ -25,6 +25,7 @@
   const placeholder = document.getElementById('placeholder')
   const context = document.getElementById('context')
   const refreshed = document.getElementById('refreshed')
+  const offline = document.getElementById('offline')
   const version = document.getElementById('version')
   const allToggle = document.getElementById('status-expand-all')
 
@@ -64,6 +65,11 @@
   // The text of the notices on screen, so that they are rebuilt, and read
   // out, only when it changes.
   let noticesKey = ''
+  // When the last answer with the readings arrived, and the text of the
+  // notice shown while no newer answer comes, so that it is rebuilt, and
+  // read out, only when it changes.
+  let answeredAt = null
+  let offlineText = ''
 
   const STATE_LABELS = {
     ok: 'Publishing',
@@ -151,14 +157,17 @@
    * Says why a total was last cleared. Without this a total that starts
    * again at an unexpected time gives no hint of the reason.
    */
-  function describeReset (record) {
+  function describeReset (record, entry) {
     if (!record || !record.at) return ''
     const at = when(record.at)
+    // The total a period ended with, when the plugin kept it, in the
+    // reading the page shows for the entry's value.
+    const closed = Number.isFinite(record.total) ? `; the ${record.period || 'period'} closed at ${withUnit(record.total, entry)}` : ''
     switch (record.cause) {
       case 'period':
-        return ` Last reset ${at}: a new ${record.period || 'period'} began.`
+        return ` Last reset ${at}: a new ${record.period || 'period'} began${closed}.`
       case 'zone':
-        return ` Last reset ${at}: the time zone changed${record.zone ? ` to ${zoneLabel(record.zone)}` : ''} and a new period had already begun there.`
+        return ` Last reset ${at}: the time zone changed${record.zone ? ` to ${zoneLabel(record.zone)}` : ''} and a new period had already begun there${closed}.`
       case 'path': {
         const fall = Number.isFinite(record.from) && Number.isFinite(record.to) ? ` fell from ${figure(record.from)} to ${figure(record.to)}` : ' fell'
         const source = record.source ? `, a value from ${record.source}` : ''
@@ -169,6 +178,14 @@
       default:
         return ''
     }
+  }
+
+  /** A value with its unit, converted as the reading of the entry is: 2.4 kWh. */
+  function withUnit (value, entry) {
+    const unit = (entry && entry.unit) || ''
+    const converted = everyday(value, unit, entry && entry.type)
+    if (converted) return `${converted.figure}${converted.unit ? ` ${converted.unit}` : ''}`
+    return `${figure(value)}${unit ? ` ${unit}` : ''}`
   }
 
   /** A length of time as a reader says it: 45 s, 10 min 30 s, 2 h 05 min. */
@@ -209,7 +226,16 @@
         ? ` The latest stretch found is ${c.state.toUpperCase()}, begun ${duration(c.stateFor)} ago.`
         : ` The latest stretch found is ${c.state.toUpperCase()}; its start was not seen.`
     }
-    return `${how}${found}${now}${describeReset(entry.lastReset)}`
+    // The ON time so far is the one figure not taken from the cycles
+    // already complete, so the sentence says what it publishes.
+    let figureNow = ''
+    if (entry.statistic === 'onSoFar') {
+      const soFar = Number.isFinite(c.onSoFar) ? c.onSoFar : entry.value
+      figureNow = Number.isFinite(soFar)
+        ? ` Publishes the ON time so far: ${duration(soFar)}.`
+        : ' Publishes the ON time so far.'
+    }
+    return `${how}${found}${now}${figureNow}${describeReset(entry.lastReset, entry)}`
   }
 
   /**
@@ -238,7 +264,7 @@
     const corrected = entry.sinceCorrected && entry.sinceCorrected.at
       ? ` The start time was set on ${when(entry.sinceCorrected.at)} without clearing the total, because the earlier one${entry.sinceCorrected.previous ? ` (${when(entry.sinceCorrected.previous)})` : ''} could not be used.`
       : ''
-    return `${kind} on ${entry.inputs.join(', ')}, ${reset}.${since}${describeReset(entry.lastReset)}${corrected}`
+    return `${kind} on ${entry.inputs.join(', ')}, ${reset}.${since}${describeReset(entry.lastReset, entry)}${corrected}`
   }
 
   function createRow (entry) {
@@ -362,7 +388,14 @@
   async function reset (row, entry) {
     setStage(row, entry, 'busy')
     try {
-      const response = await fetch(`${API}/${encodeURIComponent(entry.id)}/reset`, { method: 'POST', credentials: 'same-origin' })
+      // The reset route takes JSON only, so that a form on another site
+      // cannot send it.
+      const response = await fetch(`${API}/${encodeURIComponent(entry.id)}/reset`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      })
       if (response.ok) {
         showResult(row, entry, entry.type === 'cycles' ? 'Cycles forgotten' : 'Reset to zero', false)
       } else if (response.status === 401 || response.status === 403) {
@@ -515,6 +548,8 @@
   }
 
   function render (data) {
+    answeredAt = new Date()
+    showOffline('')
     timeZone = data.timeZone
     const source = data.timeZoneSource || {}
     const zonePaths = [...(source.paths || []), source.path, source.lastChange && source.lastChange.fromPath, source.lastChange && source.lastChange.toPath]
@@ -584,7 +619,41 @@
       placeholder.hidden = true
     }
     const started = data.startedAt ? `. Plugin running since ${when(data.startedAt)}` : ''
-    refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}${started}`
+    refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(answeredAt)}${started}`
+  }
+
+  /**
+   * Shows, or with an empty text takes away, the notice that the readings
+   * are old, and dims the readings while it shows. The notice says so in
+   * words, so the dimming is not the only sign, and it is read out once
+   * when it appears or changes.
+   */
+  function showOffline (text) {
+    sheet.classList.toggle('is-offline', text !== '')
+    if (text === offlineText) return
+    offlineText = text
+    offline.replaceChildren()
+    if (text) offline.append(notice('warning', text))
+  }
+
+  /** The time of the last answer, with the date when it was not today. */
+  function answeredWhen () {
+    const today = new Date().toDateString() === answeredAt.toDateString()
+    const options = today ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }
+    return new Intl.DateTimeFormat(undefined, options).format(answeredAt)
+  }
+
+  /**
+   * Keeps the readings on screen, dimmed, when a refresh brings no new
+   * ones. Gives false when there are none to keep.
+   */
+  function keepReadings (status) {
+    if (!answeredAt || rows.size === 0) return false
+    const since = answeredWhen()
+    showOffline(status === null
+      ? `The server could not be reached since ${since}; the readings shown are from then.`
+      : `The server has answered with an error (${status}) since ${since}; the readings shown are from then.`)
+    return true
   }
 
   /**
@@ -617,6 +686,7 @@
     } catch (err) {
       if (number < shownAnswer) return
       shownAnswer = number
+      keepReadings(null)
       refreshed.textContent = 'The server could not be reached. Trying again.'
       return
     }
@@ -628,14 +698,27 @@
       return
     }
 
+    // An answer that is not the readings, such as an error from a proxy
+    // in front of a server that is restarting, leaves the readings on
+    // screen, dimmed. An answer that says why there are none clears them.
+    // A 503 says why only when it comes from the plugin, with its reason; a
+    // proxy in front of a server that is restarting answers 503 too.
+    const notRunning = result.status === 503 && !!result.body && typeof result.body.error === 'string'
+    const says = result.status === 401 || result.status === 403 || notRunning
+    if (!says && keepReadings(result.status)) {
+      refreshed.textContent = `The server answered ${result.status}. Trying again.`
+      return
+    }
+    showOffline('')
+    answeredAt = null
     clearEntries()
     noticesKey = ''
     notices.replaceChildren()
     if (result.status === 401 || result.status === 403) {
       showPlaceholder('Log in to Signal K to see the calculated paths.', { text: 'Log in', href: '/admin/#/login' })
-    } else if (result.status === 503 && result.body && result.body.blocked) {
+    } else if (notRunning && result.body.blocked) {
       showPlaceholder(`${result.body.error}. No entries are running. The file has been left as it is.`, { text: 'Open the editor to save a new set', href: '#edit' })
-    } else if (result.status === 503) {
+    } else if (notRunning) {
       showPlaceholder('The plugin is not running. Enable it in the plugin configuration.', { text: 'Open the configuration', href: SETTINGS_URL })
     } else {
       showPlaceholder(`The server answered ${result.status}. Trying again.`)

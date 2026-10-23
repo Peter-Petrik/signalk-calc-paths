@@ -20,6 +20,19 @@ const createPlugin = require('../index')
 const store = require('../lib/store')
 const { call, fakeApp, fakeRouter } = require('./support')
 
+/**
+ * Calls the reset route as the page does, with a JSON content type, which
+ * the route requires from version 0.7.0. support.call() sends no headers.
+ */
+function callReset (route, params) {
+  const response = { statusCode: 200, body: null }
+  route.handler({ params, headers: { 'content-type': 'application/json' } }, {
+    status (code) { response.statusCode = code; return this },
+    json (value) { response.body = value }
+  })
+  return response
+}
+
 function started (app) {
   const plugin = createPlugin(app)
   const router = fakeRouter()
@@ -91,7 +104,7 @@ test('a plugin switched off with an unusable entries file cannot be started thro
 
     // The other routes say the same: the plugin is off.
     for (const [key, params, body] of [['GET /api/config'], ['GET /api/entries'], ['POST /api/entries/:id/reset', { id: 'a.today' }], ['POST /api/preview', {}, { inputs: [], expression: '1 + 1' }]]) {
-      const answer = call(route(key), { params, body })
+      const answer = key.endsWith('/reset') ? callReset(route(key), params) : call(route(key), { params, body })
       assert.equal(answer.statusCode, 503, key)
       assert.equal(answer.body.blocked, undefined, key)
     }
@@ -172,7 +185,7 @@ test('a state file that cannot be read is never written over, and is read again 
   app.send('a.total', 10)
   app.send('a.total', 15)
   t.mock.timers.tick(31000)
-  assert.equal(call(route('POST /api/entries/:id/reset'), { params: { id: 'a.today' } }).statusCode, 200)
+  assert.equal(callReset(route('POST /api/entries/:id/reset'), { id: 'a.today' }).statusCode, 200)
   plugin.stop()
   failing.mock.restore()
   assert.equal(app.file('state.json'), stateWithTotal)
@@ -301,7 +314,7 @@ test('the OpenAPI description names every answer the routes give', () => {
   assert.deepEqual(Object.keys(api.paths['/api/entries'].get.responses).sort(), ['200', '503'])
   assert.ok(api.paths['/api/entries'].get.responses[503].content['application/json'].schema.properties.blocked)
   const reset = api.paths['/api/entries/{id}/reset'].post
-  assert.deepEqual(Object.keys(reset.responses).sort(), ['200', '404', '503'])
+  assert.deepEqual(Object.keys(reset.responses).sort(), ['200', '404', '415', '503'])
   assert.ok(reset.responses[200].content['application/json'].schema.properties.reset)
   const preview = api.paths['/api/preview'].post
   assert.deepEqual(Object.keys(preview.responses).sort(), ['200', '503'])

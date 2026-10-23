@@ -36,6 +36,7 @@ The plugin is plain JavaScript with no build step and one runtime dependency, `e
 | `lib/schema.js` | The plugin settings form and the field definitions the editor builds its forms from. |
 | `lib/openapi.js` | The description of the HTTP routes shown in the server's OpenAPI browser. |
 | `public/` | The page under Webapps: the status page and the entry editor. |
+| `docs/` | Pages the README links to: upgrading from earlier versions, and time zone changes worked through. |
 | `test/` | Automated tests. |
 | `integration/` | An end-to-end check against a running Signal K server. |
 
@@ -71,14 +72,14 @@ The end-to-end check runs against a Signal K server with this plugin installed, 
 SIGNALK_URL=http://localhost:3000 npm run test:integration
 ```
 
-Every push runs Signal K's plugin CI workflow, which installs the plugin into a server and runs the tests on Linux, macOS and Windows under Node.js 22 and 24.
+Every push runs Signal K's plugin CI workflow, which installs the plugin into a server and runs the tests on Linux (x64 and arm64), macOS and Windows under Node.js 22 and 24. Its server is started with `--override-timestamps`, which stamps every value with the time it arrives, so the time stamp of a period's closing total can only be checked against a server started without it.
 
 ## Pull Requests
 
 1. One logical change per pull request.
 2. Include a clear description of what the change does and why. The maintainer writes the `CHANGELOG.md` entry when the change is released.
 3. Run `npm test` before submitting. For a change to `index.js` or `public/`, also try it against a running Signal K server and say so in the description.
-4. A change to how a total is calculated, reset or restored must be reflected in the "How the Calculations Behave" and "Limitations and Assumptions" sections of the README.
+4. A change to how a total is calculated, reset or restored must be reflected in the "How the Calculations Behave" and "Limitations and Assumptions" sections of the README. A new or moved field of an entry is listed in the README's table for its type, in the order the editor shows it (`entryOrder` in `lib/schema.js`).
 
 ## Code Style
 

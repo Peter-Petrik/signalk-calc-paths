@@ -73,6 +73,14 @@ on:
         default: '["2.34.0", "latest"]'
         type: string
 
+# The shared workflow is followed on its master branch, as the caller
+# example does, so that it keeps up with Signal K without a change here; it
+# is therefore not pinned to a commit. It runs with no secrets, and its
+# token is held to reading the repository: a called workflow can be given
+# fewer rights by its caller, never more.
+permissions:
+  contents: read
+
 jobs:
   # ── Automatic runs (push / pull request) ──────────────────
   test-plugin-auto:

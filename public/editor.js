@@ -34,6 +34,12 @@
   // Units offered while typing; any other text is accepted too.
   const UNITS = ['W', 'J', 'V', 'A', 'C', 's', 'm', 'm/s', 'm3', 'm3/s', 'K', 'Pa', 'Hz', 'rad', 'ratio']
 
+  // The units of the Signal K specification: the keys of definitions.units
+  // in schemas/definitions.json of github.com/SignalK/specification (master,
+  // October 2026). Another unit is saved and published as typed, with a
+  // warning in the editor, as displays cannot convert from it.
+  const SIGNALK_UNITS = new Set(['s', 'Hz', 'm3', 'm3/s', 'kg/s', 'kg/m3', 'deg', 'rad', 'rad/s', 'A', 'C', 'V', 'W', 'Nm', 'J', 'ohm', 'm', 'm/s', 'm2', 'K', 'Pa', 'kg', 'ratio', 'm/s2', 'rad/s2', 'N', 'T', 'Lux', 'Pa/s', 'Pa.s', 'B', 'b/s'])
+
   // Fields that hold a path, and so get suggestions and a live value.
   const PATH_FIELDS = new Set(['input', 'output', 'resetPath'])
 
@@ -156,7 +162,10 @@
       const inputs = Array.isArray(entry.inputs) ? entry.inputs : []
       if (field === 'smoothing') return inputs.some((input) => input.kind === 'wave')
       if (field === 'combine') return inputs.length > 1
-      if (field === 'minCycles') return entry.statistic !== 'cycles'
+      // The ON time so far is read from the stretch under way, so the
+      // window and the cycles needed play no part in it.
+      if (field === 'minCycles') return entry.statistic !== 'cycles' && entry.statistic !== 'onSoFar'
+      if (field === 'window') return entry.statistic !== 'onSoFar'
       return true
     }
     if (field === 'resetPath') return entry.resets === 'path'
@@ -169,7 +178,7 @@
 
   // The units of the figures a cycles entry publishes (CYCLE_FIGURES in
   // lib/config.js), for a path that is a cycles entry's output.
-  const CYCLE_UNITS = { onMedian: 's', offMedian: 's', periodMedian: 's', duty: 'ratio', lastOn: 's', cycles: '' }
+  const CYCLE_UNITS = { onMedian: 's', offMedian: 's', periodMedian: 's', duty: 'ratio', lastOn: 's', onSoFar: 's', cycles: '' }
 
   // Settings given in the unit of the entry's input path.
   const UNIT_FIELDS = { integration: 'threshold', counter: 'minStep' }
@@ -818,7 +827,7 @@
         const field = target.dataset.fault
         delete target.dataset.fault
         target.removeAttribute('aria-invalid')
-        target.removeAttribute('aria-describedby')
+        describedBy(target, `faults-${entry.id}`, false)
         dropFaults(entry, live, (name) => name === field)
       }
     }
@@ -878,15 +887,37 @@
     drawFaults(live.error, entry)
   }
 
+  /** Adds an id to the texts that describe a control, or takes it away. */
+  function describedBy (control, id, on) {
+    const ids = (control.getAttribute('aria-describedby') || '').split(' ').filter((one) => one && one !== id)
+    if (on) ids.push(id)
+    if (ids.length > 0) control.setAttribute('aria-describedby', ids.join(' '))
+    else control.removeAttribute('aria-describedby')
+  }
+
   /** Marks each field a fault lies in, and ties it to the list of faults. */
   function markFaults (entry, item) {
     for (const fault of state.faults[entry.id] || []) {
       const control = faultControl(item, entry, fault.field)
       if (!control) continue
       control.setAttribute('aria-invalid', 'true')
-      control.setAttribute('aria-describedby', `faults-${entry.id}`)
+      describedBy(control, `faults-${entry.id}`, true)
       control.dataset.fault = fault.field
     }
+  }
+
+  /**
+   * The warning under the Unit field when it holds a unit Signal K does
+   * not know. Saving stays allowed: the value is published as it is.
+   */
+  function unitWarning (control, warning) {
+    const unit = control.value.trim()
+    const foreign = unit !== '' && !SIGNALK_UNITS.has(unit)
+    warning.textContent = foreign
+      ? `"${unit}" is not a Signal K unit. Signal K publishes SI units such as W, J, V, A, s, m3, K, Pa and ratio; displays convert from them, and a non-SI unit is shown as is.`
+      : ''
+    warning.hidden = !foreign
+    describedBy(control, warning.id, foreign)
   }
 
   /** Draws one field of an entry's form. */
@@ -992,6 +1023,13 @@
     }
     control.id = fieldId
     wrap.append(control)
+    if (field === 'unit') {
+      const warning = element('p', 'field-warning')
+      warning.id = `${fieldId}-warning`
+      wrap.append(warning)
+      unitWarning(control, warning)
+      control.addEventListener('input', () => unitWarning(control, warning))
+    }
     if (PATH_FIELDS.has(field)) {
       const hint = element('p', 'field-hint')
       live.hints.set(field, hint)

@@ -152,7 +152,8 @@ test('a daily counter restarts from zero at midnight with the last value as base
   h.input(12 * 3600 - 2, 'm.total', 1500)
   h.tick(12 * 3600 - 1)
   assert.equal(h.value('m.today'), 500)
-  assert.deepEqual(h.tick(12 * 3600), [{ path: 'm.today', value: 0 }])
+  // The day's total goes out dated just before midnight, then the zero.
+  assert.deepEqual(h.tick(12 * 3600), [{ path: 'm.today', value: 500, timestamp: NOON + 12 * 3600000 - 1 }, { path: 'm.today', value: 0 }])
   assert.equal(h.state('m.today', 12 * 3600).since, '2026-10-10T00:00:00.000Z')
   h.input(12 * 3600 + 5, 'm.total', 1500)
   h.input(18 * 3600, 'm.total', 1620)
@@ -619,7 +620,7 @@ test('a restored total rolls over at the boundary while its input stays silent',
   const state = second.state('e.today', 2 * 3600 + 1)
   assert.equal(state.state, 'stale')
   assert.equal(state.since, '2026-10-10T00:00:00.000Z')
-  assert.deepEqual(state.lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day' })
+  assert.deepEqual(state.lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day', total: 900 })
 })
 
 test('entries that read a restored total hear it once it is being published', () => {
@@ -671,7 +672,7 @@ test('the cause of the last reset is recorded and survives a restart', () => {
   assert.deepEqual(h.state('m.byHand', 200).lastReset, { at: '2026-10-09T12:03:20.000Z', cause: 'request' })
 
   h.tick(12 * 3600 + 1)
-  assert.deepEqual(h.state('m.byDay', 12 * 3600 + 1).lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day' })
+  assert.deepEqual(h.state('m.byDay', 12 * 3600 + 1).lastReset, { at: '2026-10-10T00:00:00.000Z', cause: 'period', period: 'day', total: 0 })
   // A reset of one entry leaves the records of the others alone.
   assert.equal(h.state('m.byPath', 12 * 3600 + 1).lastReset.cause, 'path')
 
@@ -887,7 +888,8 @@ test('a clock that stays behind the saved time is accepted after an hour', () =>
   // The total was kept, and the next real midnight resets as usual.
   engine.input('m.total', 11, NOON + 3800000, 3800000)
   assert.equal(engine.tick(NOON + 3800000, 3800000)[0].value, 10)
-  assert.equal(engine.tick(NOON + 12 * 3600000, 12 * 3600000)[0].value, 0)
+  // The day's total goes out first, dated just before midnight.
+  assert.deepEqual(engine.tick(NOON + 12 * 3600000, 12 * 3600000).map((p) => p.value), [10, 0])
 })
 
 // ------------------------------------------------------------------- summary

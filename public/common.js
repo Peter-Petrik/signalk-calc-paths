@@ -45,7 +45,8 @@
 
   /**
    * Turns a value in a Signal K unit into the everyday reading for that
-   * unit: joules into Wh or kWh, seconds into hours and minutes, and so on.
+   * unit: joules into Wh or kWh, seconds into hours and minutes, pascals
+   * into hPa, radians into degrees, coulombs into Ah, and so on.
    * Returns null when the published unit is already the natural reading.
    */
   function everyday (value, unit, type) {
@@ -84,6 +85,18 @@
         // Only a formula can hold a temperature. A counter or integration
         // in kelvin is a difference or a sum, where the offset is wrong.
         return type === 'formula' ? { figure: figure(value - 273.15), unit: '°C' } : null
+      // The conversions below are plain factors with no offset, so they
+      // hold for every type of entry: a sum or a difference of pascals is
+      // that many hPa as well, unlike a sum of kelvin.
+      case 'Pa':
+        return { figure: figure(value / 100), unit: 'hPa' }
+      case 'rad':
+        return { figure: figure(value * 180 / Math.PI), unit: '°' }
+      case 'rad/s':
+        return { figure: figure(value * 180 / Math.PI), unit: '°/s' }
+      case 'C':
+        // A charge in coulombs is read on a battery monitor as amp hours.
+        return { figure: figure(value / 3600), unit: 'Ah' }
       default:
         return null
     }

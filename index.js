@@ -45,6 +45,68 @@ const SAVE_INTERVAL_MS = 30000
 // anything new having been published. See ZoneTracker#recheck().
 const ZONE_RECHECK_TICKS = 60
 
+/**
+ * Arranges the publications of one calculation pass as the updates of one
+ * delta.
+ *
+ * Most publications are current values and carry no time stamp: the server
+ * stamps them on arrival. The closing total of a period carries the moment
+ * the period ended, so that a history kept by time files it under the
+ * period it belongs to and not under the first moments of the next. One
+ * update holds one time stamp, so each time stamp gets an update of its
+ * own. They go oldest first and the current values last: the server keeps
+ * the value of a path that arrives last, and that must be the current one.
+ *
+ * @param {Array<{path: string, value: number|null, timestamp?: number}>} publications
+ *   What Engine#tick() returned; a timestamp is in epoch milliseconds.
+ * @returns {Array<object>} The updates, in the order they are to be sent.
+ */
+function updatesFor (publications) {
+  const stamped = new Map()
+  const current = []
+  for (const { path, value, timestamp } of publications) {
+    if (Number.isFinite(timestamp)) {
+      if (!stamped.has(timestamp)) stamped.set(timestamp, [])
+      stamped.get(timestamp).push({ path, value })
+    } else {
+      current.push({ path, value })
+    }
+  }
+  const updates = [...stamped.keys()].sort((a, b) => a - b).map((timestamp) => ({ timestamp: new Date(timestamp).toISOString(), values: stamped.get(timestamp) }))
+  if (current.length > 0) updates.push({ values: current })
+  return updates
+}
+
+/**
+ * The metadata the plugin announces for an entry's output: its unit, and
+ * its name as both display name and description.
+ */
+function metadataOf (entry) {
+  const value = {}
+  if (entry.unit) value.units = entry.unit
+  if (entry.name) {
+    value.displayName = entry.name
+    value.description = entry.name
+  }
+  return value
+}
+
+/**
+ * Whether a request says its body is JSON. Only the media type counts, in
+ * any case and with any parameters such as a charset.
+ */
+function isJson (req) {
+  const type = req && req.headers ? req.headers['content-type'] : undefined
+  return typeof type === 'string' && type.split(';')[0].trim().toLowerCase() === 'application/json'
+}
+
+// What a key of the metadata is set to when the plugin takes it away. The
+// server merges metadata and offers no way to delete a key through a delta,
+// so a key is overwritten instead: with an empty text for the description,
+// which is what the server itself gives every path's metadata to begin
+// with, and with null for the others, which have no such default.
+const EMPTIED = { units: null, displayName: null, description: '' }
+
 module.exports = function (app) {
   const plugin = {
     id: PLUGIN_ID,
@@ -119,6 +181,9 @@ module.exports = function (app) {
   let latest = new Map()
   let seenBySource = new Map()
   let outdated = { count: 0, last: null }
+  // The metadata last announced for each output path, as the server holds
+  // it from this plugin. See publishMetadata().
+  let announced = new Map()
 
   // Both clocks are read through these two functions so that every value
   // and every tick is stamped the same way.
@@ -145,20 +210,45 @@ module.exports = function (app) {
    * Announces the unit and description of every output path. Signal K
    * keeps this metadata with the path, so instrument displays can label
    * the value without any configuration of their own.
+   *
+   * The server keeps metadata until it restarts, and a new announcement
+   * only adds to it. After an edit, therefore, only what differs from the
+   * last announcement is sent: a key that is new or changed with its value,
+   * and a key the plugin no longer gives, on a path it still publishes or
+   * on one it gave up, emptied (see EMPTIED). A path whose metadata is
+   * unchanged gets nothing, which also leaves alone any metadata set on it
+   * by hand in the server. The record of what was announced is kept only
+   * once the server took the message, so a failed send is tried again at
+   * the next edit.
    */
   function publishMetadata () {
-    const meta = []
+    const wanted = new Map()
     for (const entry of normalized.entries) {
       if (!entry.enabled || entry.error) continue
+      const value = metadataOf(entry)
+      if (Object.keys(value).length > 0) wanted.set(entry.output, value)
+    }
+    const meta = []
+    for (const [path, before] of announced) {
+      if (wanted.has(path)) continue
       const value = {}
-      if (entry.unit) value.units = entry.unit
-      if (entry.name) {
-        value.displayName = entry.name
-        value.description = entry.name
+      for (const key of Object.keys(before)) value[key] = EMPTIED[key]
+      meta.push({ path, value })
+    }
+    for (const [path, value] of wanted) {
+      const before = announced.get(path) || {}
+      const change = {}
+      for (const key of Object.keys(EMPTIED)) {
+        if (key in value) {
+          if (value[key] !== before[key]) change[key] = value[key]
+        } else if (key in before) {
+          change[key] = EMPTIED[key]
+        }
       }
-      if (Object.keys(value).length > 0) meta.push({ path: entry.output, value })
+      if (Object.keys(change).length > 0) meta.push({ path, value: change })
     }
     if (meta.length > 0) app.handleMessage(PLUGIN_ID, { updates: [{ meta }] })
+    announced = wanted
   }
 
   /**
@@ -220,9 +310,9 @@ module.exports = function (app) {
       const publications = engine.tick(wallNow(), monoNow())
       if (publications.length > 0) {
         try {
-          app.handleMessage(PLUGIN_ID, {
-            updates: [{ values: publications.map(({ path, value }) => ({ path, value })) }]
-          })
+          // One message for the whole pass: a failure concerns all of it,
+          // and all of it is handed back below.
+          app.handleMessage(PLUGIN_ID, { updates: updatesFor(publications) })
         } catch (err) {
           // The engine sends a value only when it changes, or a null only
           // once, so what did not get out is handed back to be sent again
@@ -639,6 +729,9 @@ module.exports = function (app) {
     latest = new Map()
     seenBySource = new Map()
     outdated = { count: 0, last: null }
+    // Announced afresh at every start: the server may have restarted, and
+    // a plugin that stopped and started again has no record from before.
+    announced = new Map()
     subscribedPaths = new Set()
     lastStatus = null
     lastSaveMono = monoNow()
@@ -938,7 +1031,16 @@ module.exports = function (app) {
       })
     }
 
+    // A browser lets a page of any site post a form, with the user's login
+    // cookie, to any address: as form data or plain text, but never as
+    // JSON. A request that is JSON either comes from a page of the server
+    // itself or has passed the server's CORS check. The reset clears a
+    // total for good, so it accepts only that.
     const resetEntry = (req, res) => {
+      if (!isJson(req)) {
+        res.status(415).json({ error: 'A reset must be sent with Content-Type: application/json.' })
+        return
+      }
       if (!running || !engine) {
         res.status(503).json({ error: 'The plugin is not running.' })
         return

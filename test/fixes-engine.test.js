@@ -241,12 +241,15 @@ test('a total that would overflow keeps its value and leaves the addition out', 
   const h = harness([{ id: 'c', type: 'counter', input: 'm.total', output: 'm.sum', resets: 'manual', staleTimeout: 0 }])
   h.input(0, 'm.total', 0)
   h.input(1, 'm.total', 1e308)
+  // Two zeros in a row: a single one would be taken as a glitch and undone
+  // by the next value, and then nothing would overflow.
   h.input(2, 'm.total', 0)
-  h.input(3, 'm.total', 1.5e308)
-  h.tick(3)
+  h.input(3, 'm.total', 0)
+  h.input(4, 'm.total', 1.5e308)
+  h.tick(4)
   assert.equal(h.value('m.sum'), 1e308)
-  assert.equal(h.state('m.sum', 3).lastReset, null)
-  assert.match(h.state('m.sum', 3).message, /left out/)
+  assert.equal(h.state('m.sum', 4).lastReset, null)
+  assert.match(h.state('m.sum', 4).message, /left out/)
 })
 
 // ------------------------------------------- 8. sending again what failed

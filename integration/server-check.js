@@ -42,6 +42,11 @@ async function getJson (path) {
   return response.json()
 }
 
+/** Calls the reset route as the plugin's page does: as JSON. */
+function resetRoute (output, init = { headers: { 'Content-Type': 'application/json' }, body: '{}' }) {
+  return fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent(output)}/reset`, { method: 'POST', ...init })
+}
+
 async function selfPath (path) {
   const response = await fetch(`${BASE}/signalk/v1/api/vessels/self/${path.replaceAll('.', '/')}`)
   return response.status === 200 ? response.json() : null
@@ -182,6 +187,11 @@ async function main () {
   const regrouped = await getJson(`/plugins/${PLUGIN}/api/entries`)
   assert.deepEqual(regrouped.groups, [group])
   assert.equal(regrouped.entries[0].name, 'Check doubled, renamed')
+  // The new name reaches the metadata the server holds for the path.
+  await eventually('the new name in the metadata', async () => {
+    const node = await selfPath('calcPathsCheck.doubled')
+    return node && node.meta && node.meta.displayName === 'Check doubled, renamed' ? node : null
+  })
   assert.ok(regrouped.entries.every((e) => e.group === group.id && e.state === 'ok'))
   const stale = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
     method: 'PUT',
@@ -212,11 +222,17 @@ async function main () {
   assert.equal(offset.entries.every((e) => e.state === 'ok'), true, 'an entry stopped publishing after the zone changed')
   console.log('  a time zone published in Signal K is followed')
 
-  const reset = await fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent('calcPathsCheck.sum')}/reset`, { method: 'POST' })
+  // What a form on another site could send is refused.
+  const form = await resetRoute('calcPathsCheck.sum', { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'a=1' })
+  assert.equal(form.status, 415, `a reset sent as a form answered ${form.status}`)
+  const reset = await resetRoute('calcPathsCheck.sum')
   assert.equal(reset.status, 200, `the reset route answered ${reset.status}`)
-  const missing = await fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent('calcPathsCheck.doubled')}/reset`, { method: 'POST' })
+  // The page sends {}; a request with the type and no body is taken too.
+  const empty = await resetRoute('calcPathsCheck.sum', { headers: { 'Content-Type': 'application/json' } })
+  assert.equal(empty.status, 200, `a reset without a body answered ${empty.status}`)
+  const missing = await resetRoute('calcPathsCheck.doubled')
   assert.equal(missing.status, 404, 'resetting a formula should answer 404')
-  console.log('  reset route works')
+  console.log('  reset route works, and refuses a form')
 
   // The status line is refreshed once a second, so it is waited for.
   const statusMessage = await eventually('the plugin status to name the followed zone', async () => {
@@ -231,10 +247,13 @@ async function main () {
   const SWITCH = 'calcPathsCheck.switch'
   const before = await getJson(`/plugins/${PLUGIN}/api/config`)
   const cycles = { id: 'checkCycles', type: 'cycles', name: 'Check cycles', inputs: [{ path: SWITCH, kind: 'onoff', threshold: 0 }], statistic: 'onMedian', minCycles: 2, shortest: 1, longest: 60, staleTimeout: 0, output: 'calcPathsCheck.onMedian' }
+  // The ON time so far, on the same switch: a figure of the stretch under
+  // way, which needs no finished cycles.
+  const soFar = { ...cycles, id: 'checkOnSoFar', name: 'Check ON so far', statistic: 'onSoFar', output: 'calcPathsCheck.onSoFar' }
   const withCycles = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ revision: before.revision, groups: before.groups, entries: [...before.entries, cycles] })
+    body: JSON.stringify({ revision: before.revision, groups: before.groups, entries: [...before.entries, cycles, soFar] })
   })
   assert.equal(withCycles.status, 200, `saving a cycles entry answered ${withCycles.status}`)
   for (let i = 0; i < 10; i++) {
@@ -251,7 +270,21 @@ async function main () {
   assert.equal(counted.unit, 's')
   const onMedian = await selfPath('calcPathsCheck.onMedian')
   assert.equal(onMedian.$source, PLUGIN)
-  const forget = await fetch(`${BASE}/plugins/${PLUGIN}/api/entries/${encodeURIComponent('calcPathsCheck.onMedian')}/reset`, { method: 'POST' })
+  // The switch was left OFF, so the ON time so far is 0; switched ON, it
+  // grows while the stretch lasts.
+  await eventually('0 as the ON time so far while OFF', async () => {
+    const node = await selfPath('calcPathsCheck.onSoFar')
+    return node && node.value === 0 ? node : null
+  })
+  await publish(SWITCH, true)
+  const growing = await eventually('the ON time so far to grow while ON', async () => {
+    const node = await selfPath('calcPathsCheck.onSoFar')
+    return node && typeof node.value === 'number' && node.value >= 2 ? node : null
+  })
+  assert.ok(growing.value < WAIT_MS / 1000 + 10, `ON time so far ${growing.value} s`)
+  await publish(SWITCH, false)
+  console.log(`  ON time so far published ${growing.value} s while the switch was ON`)
+  const forget = await resetRoute('calcPathsCheck.onMedian')
   assert.equal(forget.status, 200, `forgetting the cycles answered ${forget.status}`)
   const forgotten = (await getJson(`/plugins/${PLUGIN}/api/entries`)).entries.find((e) => e.key === 'checkCycles')
   assert.equal(forgotten.cycles.count, 0)
@@ -273,11 +306,15 @@ async function main () {
     body: JSON.stringify({ revision: latest.revision, groups: latest.groups, entries: switchedOff })
   })
   assert.equal(off.status, 200, `switching an entry off answered ${off.status}`)
-  await eventually('null on the output of the entry switched off', async () => {
+  const given = await eventually('null on the output of the entry switched off', async () => {
     const node = await selfPath('calcPathsCheck.doubled')
     return node && node.value === null ? node : null
   })
-  console.log('  null is served on the output of an entry that stopped sending')
+  // Its unit and name are taken back. The server cannot delete a key of
+  // the metadata, so they are overwritten; null and absent both count.
+  assert.equal(given.meta.units ?? null, null, `the unit ${given.meta.units} was left on the output of the entry switched off`)
+  assert.equal(given.meta.displayName ?? null, null, `the name ${given.meta.displayName} was left on the output of the entry switched off`)
+  console.log('  null is served on the output of an entry that stopped sending, without its unit and name')
 
   // Leave the server as it was found.
   const current = await getJson(`/plugins/${PLUGIN}/api/config`)

@@ -1,5 +1,8 @@
 'use strict'
 
+// WebSocket is a global of Node.js from version 22, which the plugin needs.
+/* global WebSocket */
+
 /*
  * End-to-end check against a running Signal K server.
  *

@@ -5,27 +5,27 @@ This plugin calculates new Signal K paths from existing ones and publishes them 
 
 ## Project Status
 
-New and actively maintained. The first public release was 0.1.0, in October 2026. The calculations are covered by automated tests and were checked against recorded data from a boat, and the plugin has run inside Signal K server 2.33.0. Wider field use is still to come. See [CHANGELOG.md](CHANGELOG.md) for release history and [Issues](https://github.com/Peter-Petrik/signalk-calc-paths/issues) for planned work.
+New and actively maintained. The first public release was 0.1.0, in October 2026. The calculations are covered by automated tests and were checked against recorded data from a boat, and the plugin has run inside Signal K server 2.33.0 and 2.34.0; CI tests it against the latest server release and 2.34.0. Wider field use is still to come. See [CHANGELOG.md](CHANGELOG.md) for release history and [Issues](https://github.com/Peter-Petrik/signalk-calc-paths/issues) for planned work.
 
 The plugin publishes calculated values into Signal K paths. It is not an automation tool and does not replace Node-RED: it switches nothing and raises no notifications. A rules or automation plugin can act on the values it publishes, for example to warn when a freezer's compressor cycles have grown long enough to call for a defrost.
 
 ## Features
 
-- **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`. From v0.5.0 an input can be given a value when stale, used while the input is stale or has no value, so that a device that leaves the bus, such as a shore charger at anchor, counts as `0` instead of stopping the formula.
-- **Period Counters**: The change in a running total since the start of the day, week, month or year, or since a manual reset. Counting increases suits lifetime energy and engine run time; counting decreases turns a falling tank level into consumption.
-- **Integrations**: A rate added up over time (power into energy, flow into volume), or the time an input spends above a threshold (engine running time, time a switch is on).
-- **Cycles (v0.4.0+)**: The ON and OFF stretches of a device that cycles, found from a switch, from a value against a threshold, or from a value that rises and falls with the device, such as the temperature or humidity inside a fridge. Two or more inputs can be combined, ON while all of them are ON or while any of them is. The median ON time, median OFF time, median cycle, duty cycle, last ON time or number of cycles over a window such as 24 hours is published.
-- **Selectable Resets**: Each total resets at the start of a day, week, month or year, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
-- **Ship's Time Zone (v0.2.0+)**: Days begin at local midnight in the time zone the vessel keeps. The zone is read from Signal K, where a plugin such as Ship's Time publishes it, and changes by itself when the boat changes time zone. A zone chosen in the settings is used when nothing is published.
-- **Chaining**: An entry can read the output of another entry. A formula can feed an integration, and a counter can feed a formula. Entries are calculated in dependency order, each once per incoming update.
-- **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry. From v0.6.0 an entry that stops publishing, for any reason, sends null once on its output path, so that the server does not go on serving its last result as if it were current.
-- **State Persistence**: Totals survive server restarts. The state file is rewritten in place and holds no history.
-- **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
-- **Entry Editor (v0.3.0+)**: Entries are created and changed on the plugin's page under **Webapps**, with suggestions from the server's live paths, the current value and unit of each path, a live preview of a formula's result, and a note of which entries read each other's results. Saving restarts only the entries that changed; the others keep counting without interruption.
-- **Groups (v0.3.0+)**: Entries can be sorted into groups with names of the user's choosing, and ordered within them. The status page shows a heading per group, and each group can be collapsed. From v0.4.2, **Expand all** and **Collapse all** act on every entry in the editor, on one group's entries, or on every group of the status page.
-- **Status Page**: A page under **Webapps** lists every entry with its current value, its state and a reset button. Paths named in its sentences are set in a code font.
-- **Reset Record (v0.2.1+)**: Each total records when and why it was last cleared: a new period, the followed path falling from one value to another, a request, or a change of time zone. The status page shows the record, together with the last change of the followed time zone and the time the plugin started.
-- **Clock Safety**: Sums are measured on a monotonic clock, and period resets pause while the system clock is recognisably unset, so a computer that boots at 1970 does not reset its totals or count the correction as elapsed time.
+1. **Formulas**: An expression over any number of live paths and constants, for example `i * v` or `(a + b + c) / 3600`. Arithmetic, comparisons, conditions and common mathematical functions are available. Expressions are parsed by a library and never passed to JavaScript's `eval`. From version 0.5.0 an input can be given a value when stale, used while the input is stale or has no value, so that a device that leaves the bus, such as a shore charger at anchor, counts as `0` instead of stopping the formula.
+2. **Period Counters**: The change in a running total since the start of the day, week, month or year, or since a manual reset. Counting increases suits lifetime energy and engine run time; counting decreases turns a falling tank level into consumption.
+3. **Integrations**: A rate added up over time (power into energy, flow into volume), or the time an input spends above a threshold (engine running time, time a switch is on).
+4. **Cycles (v0.4.0+)**: The ON and OFF stretches of a device that cycles, found from a switch, from a value against a threshold, or from a value that rises and falls with the device, such as the temperature or humidity inside a fridge. Two or more inputs can be combined, ON while all of them are ON or while any of them is. The median ON time, median OFF time, median cycle, duty cycle, last ON time or number of cycles over a window such as 24 hours is published.
+5. **Selectable Resets**: Each total resets at the start of a day, week, month or year, with a configurable start of day, or in step with another path, so that a calculated daily total can follow a device that keeps its own day.
+6. **Ship's Time Zone (v0.2.0+)**: Days begin at local midnight in the time zone the vessel keeps. The zone is read from Signal K, where a plugin such as Ship's Time publishes it, and changes by itself when the boat changes time zone. A zone chosen in the settings is used when nothing is published.
+7. **Chaining**: An entry can read the output of another entry. A formula can feed an integration, and a counter can feed a formula. Entries are calculated in dependency order, each once per incoming update.
+8. **Stale Input Handling**: Each entry stops publishing, or keeps publishing its last result, when an input goes quiet for longer than its stale timeout. The choice is per entry. From version 0.6.0 an entry that stops publishing, for any reason, sends null once on its output path, so that the server does not go on serving its last result as if it were current.
+9. **State Persistence**: Totals survive server restarts. The state file is replaced whole at each save, through a temporary file, and holds no history.
+10. **Unit Metadata**: Each output announces its unit and name, so instrument displays can label it.
+11. **Entry Editor (v0.3.0+)**: Entries are created and changed on the plugin's page under **Webapps**, with suggestions from the server's live paths, the current value and unit of each path, a live preview of a formula's result, and a note of which entries read each other's results. Saving restarts only the entries that changed; the others keep counting without interruption.
+12. **Groups (v0.3.0+)**: Entries can be sorted into groups with names of the user's choosing, and ordered within them. The status page shows a heading per group, and each group can be collapsed. From version 0.4.2, **Expand all** and **Collapse all** act on every entry in the editor, on one group's entries, or on every group of the status page.
+13. **Status Page**: A page under **Webapps** lists every entry with its current value and its state and, for counters, integrations and cycles entries, a reset button. Paths named in its sentences are set in a code font.
+14. **Reset Record (v0.2.1+)**: Each total records when and why it was last cleared: a new period, the followed path falling from one value to another, a request, or a change of time zone. The status page shows the record, together with the last change of the followed time zone and the time the plugin started.
+15. **Clock Safety**: Sums are measured on a monotonic clock, and period resets pause while the system clock is recognisably unset, so a computer that boots at 1970 does not reset its totals or count the correction as elapsed time.
 
 ## Configuration
 
@@ -50,18 +50,18 @@ Configuration has two parts:
 
 | Field | Default | Meaning |
 | :--- | :--- | :--- |
-| Switched on | on | An entry that is switched off publishes nothing and keeps its saved total. It may be saved unfinished. |
+| Switched on | on | An entry that is switched off publishes nothing more and keeps its saved total; if it had published since the plugin started, it sends null once on its output path. It may be saved unfinished. |
 | Name | empty | Label shown on the status page and published as the output's description. |
 | Output path | none | The Signal K path the result is published on. It needs at least two segments and must not be written by another source. |
 | Unit | empty | Unit published with the output. Signal K uses SI units: `W`, `J`, `V`, `A`, `s`, `m3`, `K`, `Pa`, `ratio`. |
 | Stale timeout | 60 s | An input with no new value for this long is stale. `0` means the input is sent only when it changes and never goes stale. |
-| When an input is stale | Stop publishing | Stop publishing until the input returns, or keep publishing the last result. From v0.6.0 an entry that stops publishing sends null once on its output path; see [Stale Inputs](#stale-inputs). |
+| When an input is stale | Stop publishing | Stop publishing until the input returns, or keep publishing the last result. From version 0.6.0 an entry that stops publishing sends null once on its output path; see [Stale Inputs](#stale-inputs). |
 
 ### Formulas
 
 | Field | Meaning |
 | :--- | :--- |
-| Inputs | A list of short names, each mapped to a path. A short name is made of letters, digits and underscores and starts with a letter. Paths cannot be written directly in an expression because they contain dots and dashes. |
+| Inputs | A list of short names, each mapped to a path. A short name is made of letters, digits and underscores, does not start with a digit or with two underscores, and is not the name of a function or constant such as `max`, `E`, `PI`, `true` or `false`. Paths cannot be written directly in an expression because they contain dots and dashes. |
 | Value when stale | Optional, per input (v0.5.0+). The value the formula uses for that input while the input is stale, has had no value since the plugin started or the entry was last changed, or holds `null` or something that is not a number. It is given in the unit Signal K publishes for the path, as the formula calculates with that. An input with such a value never makes the entry wait or go stale. Left empty, the input behaves as before. See [Stale Inputs](#stale-inputs). |
 | Expression | The calculation, written with the short names. |
 
@@ -69,7 +69,7 @@ Operators: `+`, `-`, `*`, `/`, `%`, `^`, the comparisons `==`, `!=`, `<`, `<=`, 
 
 Functions: `abs`, `acos`, `acosh`, `asin`, `asinh`, `atan`, `atan2`, `atanh`, `cbrt`, `ceil`, `cos`, `cosh`, `exp`, `expm1`, `floor`, `hypot`, `if`, `lg`, `ln`, `log`, `log10`, `log1p`, `log2`, `max`, `min`, `pow`, `pyt`, `round`, `roundTo`, `sign`, `sin`, `sinh`, `sqrt`, `tan`, `tanh`, `trunc`.
 
-Assignment, function definitions, arrays, string concatenation and property access are switched off. A result that is not a finite number, such as a division by zero, is not published.
+Assignment, function definitions, arrays, string concatenation and property access are switched off. A result that is not a finite number, such as a division by zero, is not published; a formula that had published sends null once instead (see [Stale Inputs](#stale-inputs)). The constants `true` and `false` stand for 1 and 0.
 
 ### Period Counters
 
@@ -105,13 +105,13 @@ A Cycles entry finds the ON and OFF stretches of a device that cycles and publis
 | Swing | none, required | Wave inputs. How far the value must turn back before a turning point counts, in the unit shown beside it. See [Choosing the Swing](#choosing-the-swing). |
 | Combine inputs | All inputs ON (and) | With more than one input: ON while every input is ON, or while at least one is. See [Combining Inputs](#combining-inputs). |
 | Publish | Median ON time | Median ON time, median OFF time, median cycle (an ON stretch plus the OFF stretch after it), duty cycle (the share of time ON), last ON time, or number of cycles. Times are published in seconds, the duty cycle as a ratio from 0 to 1, the number of cycles as a plain number. |
-| Window | 24 hours | The figure is taken from the stretches that ended within this many hours. |
+| Window | 24 hours | The figure is taken from the stretches that ended within this many hours. Must be above 0. |
 | Cycles needed | 3 | Nothing is published until the window holds this many complete ON stretches. Not used for the number of cycles, which is always published. |
-| Smoothing | 150 s | Wave inputs. The span the 30-second step means are averaged over before turning points are looked for. `30` switches this second averaging off. |
+| Smoothing | 150 s | Wave inputs. The span the 30-second step means are averaged over before turning points are looked for. `30` switches this second averaging off. At most 1800 s. |
 | Shortest stretch | 120 s | A change of the combined state counts only once it has held this long. |
-| Longest stretch | 7200 s | Stretches longer than this are left out of the figures. A wave that has not turned for this long is left out of the combination. |
+| Longest stretch | 7200 s | Stretches longer than this are left out of the figures. A wave that has not turned for this long is left out of the combination. Must be longer than the shortest stretch. |
 | Unit | empty | Left empty, the unit of the figure is published: `s` for times, `ratio` for the duty cycle. |
-| Stale timeout | 180 s | An input with no new value for this long has a gap, and the stretch under way is not measured. Two or three times the interval at which the slowest input reports; `0` for an input sent only when it changes, such as a switch state. Cycles entries default to 180 s rather than 60 s, so that a sensor reporting about once a minute is not cut by one late report. |
+| Stale timeout | 180 s | An input with no new value for this long has a gap, and the stretch under way is not measured. The entry itself counts as stale only while every input is silent. Two or three times the interval at which the slowest input reports; `0` for an input sent only when it changes, such as a switch state. Cycles entries default to 180 s rather than 60 s, so that a sensor reporting about once a minute is not cut by one late report. |
 
 #### Combining Inputs
 
@@ -178,6 +178,7 @@ Ship's Time itself needs one look. Version 0.1.0 of it is enabled as soon as it 
 | :--- | :--- |
 | `"Europe/Athens"` | The named zone, with its daylight saving rules. |
 | `"Pacific/Marquesas"` | The named zone, 9 hours 30 minutes behind UTC. |
+| `"europe/athens"` | From version 0.6.1 the same zone in any letter case, written as the server's runtime writes it, so that two spellings are not two zones. A different name for the same zone, such as `US/Pacific` for `America/Los_Angeles`, is kept and shown as given. |
 | `300` | 3 hours ahead of UTC. The number is hours and minutes written together, as the Signal K specification defines the offset path. |
 | `-930` | 9 hours 30 minutes behind UTC. |
 | `545` | 5 hours 45 minutes ahead of UTC. |
@@ -240,7 +241,7 @@ From version 0.3.0 entries are edited on the plugin's page: **Webapps > Calculat
 
 1. **Add entry**, at the foot of a group or of the entries outside any group, offers the four kinds, each explained in one line. **Add group** brings the new group into view with its name selected, ready to be typed over.
 2. Path fields suggest the paths the server knows on the vessel, including the outputs of other entries. Under each path field the current value and unit are shown, or a note that the path holds nothing, or holds something that cannot be calculated with, such as a position.
-3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet. From 0.5.0 each input has a **Value when stale** box, with the input's published unit beside it; the result shown uses those values for inputs that are stale or have no value, and names them.
+3. A formula shows its result with the current values a moment after typing stops, or says why there is none yet. From version 0.5.0 each input has a **Value when stale** box, with the input's published unit beside it; the result shown uses those values for inputs that are stale or have no value, and names them.
 4. An entry that reads another entry's result, or whose result another entry reads, says so, so a chain of entries can be followed.
 5. Fields that apply only to some settings, such as the threshold of an integration that adds up time, appear only when they apply.
 6. On a narrow screen each field's explanation is collapsed behind a **Help** button beside its title, and **Expand all**, **Add group**, **Export** and **Import** are collapsed behind **More**, so the bar at the top stays on one line.
@@ -271,8 +272,8 @@ This applies to the threshold and swing of a cycles input, the threshold of an i
 ### Saving
 
 1. Nothing reaches the server until **Save**. The page warns before it is left with unsaved changes, and **Discard changes** returns to the set last saved, with every entry closed. Changes count as unsaved only while the set differs from the saved one, so an edit undone by hand leaves nothing to save.
-2. The set is checked on the server before anything is saved. An entry that is switched on and cannot run (a missing path, an expression that does not parse, two entries writing one path, entries that feed each other in a loop) stops the save. Every fault is listed at the entry and each field it lies in is marked; a mark clears as soon as the field is changed. An entry that is switched off may be saved unfinished. After a save every entry is closed, except one the server reports a fault in; entries changed while the save was on its way stay as they are.
-3. When a save costs a total, the page lists what is lost and asks first: a counter or integration that is deleted, or whose output path, input path, direction, integration mode, threshold (when adding up time) or **Resets** setting changes. Other changes keep the total. Totals belong to output paths, so the comparison is made by output path: an entry that takes over an output, from an import for instance, continues its total.
+2. The set is checked on the server before anything is saved. An entry that is switched on and cannot run (a missing path, an expression that does not parse, a setting that is not a number, two entries writing one path, entries that feed each other in a loop) stops the save. A number may be typed with a decimal comma, as `1,5`; a comma followed by exactly three digits, as in `1,500`, could separate thousands and is refused. Every fault is listed at the entry and each field it lies in is marked; a mark clears as soon as the field is changed. An entry that is switched off may be saved unfinished. After a save every entry is closed, except one the server reports a fault in; entries changed while the save was on its way stay as they are.
+3. When a save costs a total, the page lists what is lost and asks first: a counter or integration that is deleted, or whose output path, input path, direction, integration mode, threshold (when adding up time) or **Resets** setting changes, and a cycles entry whose finished stretches are forgotten because its inputs, how they are read, how they are combined, its smoothing, its shortest stretch or its stale timeout change. Other changes keep the total. Totals belong to output paths, so the comparison is made by output path: an entry that takes over an output, from an import for instance, continues its total.
 4. Saving restarts only the entries whose calculation changed. An entry that differs only in its name, unit or group, and every entry left alone, keeps running as it was, in the middle of whatever it was adding up, also when it reads the result of an entry that restarted. The page reports how many entries kept running and how many started. A restarted integration begins its next stretch at the save: the time since its input's last value, at most one sampling interval, is not added.
 5. A started entry is handed the latest value of each path it reads at once, so an entry on a path that is sent rarely, such as a switch state, does not wait for the path to speak again.
 6. If the entries were saved elsewhere since the editor read them, for instance from a second browser, the save is refused, and the page offers to reload or to export the changes first. A save must name the version of the entries it was based on; the HTTP interface refuses one that does not.
@@ -340,7 +341,7 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 ### Input Values
 
 1. Numbers are used as they are. `true` and `false` count as `1` and `0`.
-2. `null` means the source has no reading: a formula waits and publishes nothing, and an integration does not join the values on either side of it. A formula input with a value when stale uses that value instead.
+2. `null` means the source has no reading: a formula waits and has no result (if it had published, it sends null once; see [Stale Inputs](#stale-inputs)), and an integration does not join the values on either side of it. A formula input with a value when stale uses that value instead.
 3. Text, objects such as a position, and numbers that are not finite are treated the same way as `null`, also by a value when stale.
 4. Where several sources publish one path, the plugin receives the source the server's source priority prefers.
 5. Values that a source sends in one Signal K update are applied together, so a formula over two of them is calculated once, from both.
@@ -377,11 +378,12 @@ Then install version 0.2.1 and restart the server. `entries.json` is left in pla
 11. "Keep publishing the last result" applies to a stale input only, as its name says: a result that is withdrawn for any other reason sends null with either setting.
 12. Nothing is sent for a path that the plugin has not published since it started, and nothing when the plugin itself stops: the server removes the plugin's values then. A database writer may skip null values; `signalk-to-influxdb2`, for one, stores no point for a null, so a chart shows a gap.
 13. The status page adds "Null was sent on" and the output path to the entry's message once null has gone out, also for an entry switched off.
+14. **An input that is another entry's result (v0.6.1+).** An entry sends its result when the result changes, so a result can hold for hours without a new value, for example a total over a switch that is off. Such an input is not judged by its age: it counts as fresh for as long as the entry that produces it is publishing and not stale, and it goes stale with that entry, which then also sends null. An integration that reads such a result goes on adding it, at the value it holds, until a new one arrives.
 
 ### System Clock
 
 1. Durations are measured on a monotonic clock, so a jump of the system clock neither adds nor removes counted time.
-2. Period boundaries need the real date. While the system clock reads earlier than 2024 or earlier than the last saved state, period resets are paused and totals keep counting. Resets resume when the clock is correct.
+2. Period boundaries need the real date. While the system clock reads earlier than 2024 or more than five minutes earlier than the last saved state, period resets are paused and totals keep counting. Resets resume when the clock is correct.
 3. If the clock stays behind the saved state for an hour, the clock is believed and the saved time is discarded.
 4. A clock that is wrong but plausible cannot be detected. A computer that restores its last shutdown time at boot runs on a date that is not earlier than the saved state, so it is trusted; if the correction later crosses a period boundary, the total resets at that moment.
 
@@ -471,7 +473,7 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 ## Limitations and Assumptions
 
 1. An integration adds nothing while the server or the plugin is stopped. A period counter does not have this limit, because the source keeps the total.
-2. Changed totals are written to disk every 30 seconds, when the plugin is stopped, at every reset, and from version 0.6.0 when the server process ends without stopping the plugin. While any total is changing, the state file is therefore rewritten every 30 seconds. Disabling the plugin, saving its settings and saving entries in the editor stop it, or save, first. A restart from the admin UI ends the server process without stopping its plugins (Signal K server 2.34.0 still does), and the plugin saves as the process ends; from server 2.34.0 a stop by signal, such as `systemctl restart`, stops the plugins first. Up to 30 seconds of an integration's total can still be lost when the process is killed outright or runs out of memory, and at a power cut.
+2. Changed totals are written to disk every 30 seconds, when the plugin is stopped, at every reset made from the status page or the reset route, and from version 0.6.0 when the server process ends without stopping the plugin. While any total is changing, the state file is therefore rewritten every 30 seconds. Disabling the plugin, saving its settings and saving entries in the editor stop it, or save, first. A restart from the admin UI ends the server process without stopping its plugins (Signal K server 2.34.0 still does), and the plugin saves as the process ends; from server 2.34.0 a stop by signal, such as `systemctl restart`, stops the plugins first. Up to 30 seconds of an integration's total can still be lost when the process is killed outright or runs out of memory, and at a power cut.
 3. The first value an entry ever sees only sets its starting point. The first period after an entry is created is therefore partial; the status page shows when counting began.
 4. A period counter in a one-way mode counts every change of at least the smallest change. Sensor noise larger than that setting is counted as real change.
 5. A followed time zone is as good as its source. The plugin does not work out a zone from the position itself; it reads what another plugin publishes. A source that looks the zone up from old or coarse data can be wrong near borders and on the open ocean.
@@ -484,7 +486,7 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 12. Only numbers and true/false values can be read. A field inside an object value cannot be selected.
 13. The plugin does not stop an output path that another source already writes. Two writers on one path give alternating values. The editor warns when the server already holds a value on the path from another source.
 14. A formula is evaluated on every input value and published at most once a second. It does not average or smooth.
-15. "When another path resets" treats any fall of the followed value as a reset. The status page records the two values and the source of the lower one.
+15. "When another path resets" treats any fall of the followed value as a reset, however small. The status page records the two values and the source of the lower one.
 16. Whether a value is an old one handed over again is judged partly by time stamps, and the time stamps of two sources need not share a clock. A source that first appears with a clock running behind the source being read loses its first value. An old value from a source the plugin has never seen, stamped later than the current one, is taken as new once. At start-up, where the server reports no value of its own for a path and two sources left values stamped by different clocks, the wrong one can be picked; the first live value then puts it right, at the cost of one false step. See [Input Values](#input-values).
 17. Published numbers are rounded to twelve significant digits.
 18. Node.js 22 or later is required.
@@ -493,13 +495,17 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 21. A Cycles entry measures what its inputs show, not the device. A temperature or humidity inside a box responds later than the compressor and is changed by the door and by what is loaded, so its stretches differ from the compressor's own. The figures suit a trend and an alert limit set on them, not a reading of the compressor's run time.
 22. A wave input is read in 30-second steps. A sensor that reports less often, up to about once a minute, leaves some steps empty, and the smoothing averages the steps there are. A pause longer than the stale timeout is a gap, which is why cycles entries default to a stale timeout of 180 seconds; a shorter one, such as 60 seconds for a sensor that reports once a minute, breaks the series at every late report.
 23. A value when stale is an assumption about a silent device. A charger that is running but has lost its connection to the bus counts as `0` all the same; the status page shows that the value when stale is in use.
+24. An integration's total for a period leaves out the time between its last value before the boundary and the boundary itself, at most one sampling interval; the new period counts from the boundary. A later release is to count it in the period that ends.
+25. With **Count** "Increases only" and **When the input moves the other way** "Carry on counting from the new value", the defaults, a source that sends one low value between two normal ones, as some devices do while starting, makes the counter add the whole climb back from that value. "Wait until the previous level is passed again" leaves the climb out instead.
+26. A cycles entry leaves out a stretch longer than the longest stretch. A device that runs, or rests, longer than that without a break does not raise the median; the figure stays at the earlier cycles, and once they leave the window the entry has no figure. A temperature alert on the box itself covers a compressor that does not stop.
+27. A wave input that stays at one value for a while at its top or bottom, such as humidity at 100 %, has its turning point placed at the start of that plateau, which lengthens the stretch that follows by up to the plateau's length.
 
 ## Prerequisites
 
-- **Signal K Server**: Developed and tested on Signal K server 2.33.0.
-- **Node.js**: Version 22 or later.
-- **Input Paths**: The paths to calculate from must already be present in Signal K. **Data > Browser** shows them with their units.
-- **Ship's Time (optional)**: A plugin that publishes the vessel's time zone, such as [Ship's Time](https://www.npmjs.com/package/@meri-imperiumi/signalk-ships-time), lets day boundaries follow the boat. Without one, a time zone is chosen in the settings.
+1. **Signal K Server**: Developed on Signal K server 2.33.0 and 2.34.0; CI tests the latest release and 2.34.0. The status page and the editor need Safari 15 or later, or a current Chrome, Edge or Firefox.
+2. **Node.js**: Version 22 or later.
+3. **Input Paths**: The paths to calculate from must already be present in Signal K. **Data > Browser** shows them with their units.
+4. **Ship's Time (optional)**: A plugin that publishes the vessel's time zone, such as [Ship's Time](https://www.npmjs.com/package/@meri-imperiumi/signalk-ships-time), lets day boundaries follow the boat. Without one, a time zone is chosen in the settings.
 
 ## Quick Start Guide
 
@@ -512,13 +518,24 @@ The defaults suit a compressor and need changing for a pump. A pump that runs fo
 7. Click **Save**.
 8. The **Status** tab shows each entry's value and state, and the time zone in use. Check the new path under **Data > Browser**.
 
+### Updating
+
+1. Update `signalk-calc-paths` under **Apps & Plugins > Store** and restart the server when prompted.
+2. Entries, groups and saved totals are kept. Read [CHANGELOG.md](CHANGELOG.md) for what changed; an entry in it under **Changed** can alter what readers of an output path see, as the null sent by an entry that stops publishing did in 0.6.0.
+
+### Uninstalling
+
+1. Remove the plugin under **Apps & Plugins > Store** and restart the server. Its output paths receive no further values.
+2. The entries, the totals and the settings stay on disk: `~/.signalk/plugin-config-data/signalk-calc-paths/` (`entries.json`, `state.json`) and `~/.signalk/plugin-config-data/signalk-calc-paths.json`. Delete them to remove everything, or keep them for a later reinstall, which takes them up again. Use **Export** first to keep the entries in a file.
+3. A history database keeps what it stored from the outputs.
+
 ## Technical Details
 
 ### Status Page and Access
 
 The page is at `/signalk-calc-paths/`, with the status at `#status` and the editor at `#edit`. With server security enabled, any logged-in user can view the status; resetting a total and editing entries require read/write or admin access. On servers that predate per-route access levels, everything but viewing requires admin access.
 
-The status shows each value in an everyday unit (Wh or kWh for joules, hours and minutes for seconds, litres for small volumes, knots for speeds, nautical miles from 1 nm up) with the published SI value beneath it.
+The status shows each value in an everyday unit with the published SI value beneath it: Wh or kWh for joules, kW from 1000 W, hours and minutes for seconds (minutes and seconds for the times of a cycles entry), litres for volumes below 1 m³, knots for speeds, nautical miles from 1 nm up, % for ratios, and °C for a formula in kelvin. Other units are shown as published.
 
 From version 0.2.1 the page also answers why a total reads what it reads:
 
@@ -532,14 +549,14 @@ From version 0.2.1 the page also answers why a total reads what it reads:
 
 | Request | Access | Result |
 | :--- | :--- | :--- |
-| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). From 0.5.0 a formula also reports `substituted`, the inputs counted as their value when stale, its `staleTimeout`, and `edited`, whether it was changed since the plugin started. |
+| `GET /plugins/signalk-calc-paths/api/entries` | Any logged-in user | Every entry with its value, state, message and last reset (`lastReset`, `sinceCorrected`), the time zone in use with its source and last change (`timeZoneSource.lastChange`), the time the plugin started (`startedAt`) and the count of ignored values (`outdatedValues`). From version 0.5.0 a formula also reports `substituted`, the inputs counted as their value when stale, its `staleTimeout`, and `edited`, whether it was changed since the plugin started. |
 | `POST /plugins/signalk-calc-paths/api/entries/{output path}/reset` | Read/write or admin | Clears the total of one counter or integration, or makes a cycles entry forget the cycles counted. |
 | `GET /plugins/signalk-calc-paths/api/config` | Read/write or admin | The groups and entries as saved, their revision, and the field definitions the editor builds its forms from. |
 | `PUT /plugins/signalk-calc-paths/api/config` | Read/write or admin | Saves a set of groups and entries, given with the revision read. Answers 400 with the faults by entry (`entryErrors`, the first of each; from 0.4.1 also `entryFaults`, every fault with the field it lies in), or 409 when the set was changed since that revision. |
 | `GET /plugins/signalk-calc-paths/api/paths` | Read/write or admin | Every path on the vessel with its current value and unit, for the editor's suggestions. |
-| `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. From 0.5.0 it takes each input's `whenStale` and the entry's `staleTimeout`, and lists in `substituted` the inputs it counted as their value when stale. |
+| `POST /plugins/signalk-calc-paths/api/preview` | Read/write or admin | Works out a formula with the current values, without saving it. From version 0.5.0 it takes each input's `whenStale` and the entry's `staleTimeout`, and lists in `substituted` the inputs it counted as their value when stale. From version 0.6.1 it refuses, as a save does, an expression or a path longer than 500 characters, more than 50 inputs, and a short name a save would refuse or that is used twice. |
 
-The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
+The routes that read or change the entries, the reset route and the preview answer 503 while the plugin is not running. While `entries.json` cannot be used, the status route answers 503 with `blocked` set, and a save is accepted, which starts a new set. In a path, the output path is URL-encoded. The interface is described in the server's OpenAPI browser, opened from **OpenApi** in the admin menu.
 
 ### Files
 
@@ -552,9 +569,9 @@ The entries and the totals are kept in the plugin's data directory:
 
 `entries.json` holds the groups and entries as the editor saves them. A file that cannot be read is left exactly as it is and reported in the plugin status and on the page; no entry runs and no total is saved until a new set is saved in the editor. That save writes the new set in full first, then moves the old file aside as `entries.json.unreadable-<number>`. Signal K's own backup, under **Server > Backup/Restore**, includes the directory.
 
-`state.json` is rewritten in place and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. For a cycles entry the record holds the finished stretches in its window, a few hundred numbers for a day of fridge cycles. It keeps no older history and does not grow. Deleting an entry in the editor removes its record at the next save; switching an entry off keeps it. A record that no entry uses when the plugin starts, such as one left after a damaged `entries.json` was replaced by a smaller set, is kept for 30 days, so an entry with that output that comes back, typed in again or imported, continues its total; after that it is removed. An entry's record is discarded when its output path, its input path, its direction, its integration mode, its **Resets** setting or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
+`state.json` is replaced whole at each save, through a temporary file, and holds one small record per counter and integration, including the time and cause of its last reset, and the last time zone followed with its last change. For a cycles entry the record holds the finished stretches in its window, a few hundred numbers for a day of fridge cycles. It keeps no older history and does not grow. Deleting an entry in the editor removes its record at the next save; switching an entry off keeps it. A record that no entry uses when the plugin starts, such as one left after a damaged `entries.json` was replaced by a smaller set, is kept for 30 days, so an entry with that output that comes back, typed in again or imported, continues its total; after that it is removed. An entry's record is discarded when its output path, its input path, its direction, its integration mode, its **Resets** setting or, when adding up time, its threshold is changed, because the old total no longer describes the new calculation.
 
-To clear every total, stop the plugin, delete the file and start the plugin. A file that cannot be read is moved aside as `state.json.unreadable-<number>` and reported in the plugin status.
+To clear every total, stop the plugin, delete the file and start the plugin. A file that was read but cannot be used is moved aside as `state.json.unreadable-<number>` and reported in the plugin status. From version 0.6.1 a file that cannot be read at all, after a disk error or with the wrong permissions, is left where it is: the totals start from zero for the time being and nothing is saved, so that the file is not written over, and the plugin status says so. Once the file can be read, a restart of the plugin carries on from it.
 
 ### History and Databases
 
@@ -571,6 +588,8 @@ The calculations were replayed over five days of recorded data from one boat and
 From version 0.4.0, cycles entries were replayed over six weeks of recorded fridge and freezer data from the same boat. The median ON times matched those found independently from the same data by a separate analysis script: about 10.5 minutes for the clean fridge, 22.5 minutes for the frosted freezer and 6.5 minutes for the freezer the day after its defrost.
 
 The recorded data is not part of this repository. The automated tests use synthetic data.
+
+A set of entries is limited to 500 entries, 100 groups, 50 inputs per entry, 500 characters per text field and 1 MB in all. A save or import over these limits is refused.
 
 ### Log Monitoring
 
@@ -618,11 +637,11 @@ Detailed messages appear after switching on **Enable debug log** on the plugin's
 
 These are not implemented.
 
-* **Previous-Period Values**: Publishing the finished total of the last period, such as yesterday's yield, on a second path.
-* **Fields Inside Object Values**: Reading one field of an object-valued path.
-* **Reset by Signal K PUT**: Resetting a total from another plugin or a phone shortcut.
-* **Averages and Extremes**: A further entry type for the mean, minimum or maximum over a period.
-* **Value When Stale Beyond Formulas**: The per-input value when stale of formulas, for integrations, period counters and cycles entries.
+1. **Previous-Period Values**: Publishing the finished total of the last period, such as yesterday's yield, on a second path.
+2. **Fields Inside Object Values**: Reading one field of an object-valued path.
+3. **Reset by Signal K PUT**: Resetting a total from another plugin or a phone shortcut.
+4. **Averages and Extremes**: A further entry type for the mean, minimum or maximum over a period.
+5. **Value When Stale Beyond Formulas**: The per-input value when stale of formulas, for integrations, period counters and cycles entries.
 
 ## Support
 

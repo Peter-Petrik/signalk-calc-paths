@@ -14,7 +14,7 @@ const createPlugin = require('../index')
 const store = require('../lib/store')
 const { call, fakeApp, fakeRouter } = require('./support')
 
-const grace = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'settings-0.2.1.json'), 'utf8'))
+const legacySettings = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'settings-0.2.1.json'), 'utf8'))
 
 /** Saves a set the way the editor does: with the revision just read. */
 function put (route, body) {
@@ -31,7 +31,7 @@ function started (app) {
 
 test('the first start of 0.3.0 moves the entries out of the settings, keeps a copy and keeps every total', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
-  const app = fakeApp({}, JSON.parse(JSON.stringify(grace)))
+  const app = fakeApp({}, JSON.parse(JSON.stringify(legacySettings)))
   // State saved by 0.2.1: a manual total on one of the outputs.
   fs.writeFileSync(path.join(app.dataDir, 'state.json'), JSON.stringify({
     version: 1,
@@ -39,7 +39,7 @@ test('the first start of 0.3.0 moves the entries out of the settings, keeps a co
     entries: { 'navigation.distance.overGround.total': { signature: 'integration|navigation.distance.overGround.movingSpeed|rate|', resets: 'manual', total: 1852, since: Date.now() - 86400000 } }
   }))
   const { plugin, route } = started(app)
-  plugin.start(grace.configuration)
+  plugin.start(legacySettings.configuration)
 
   const doc = JSON.parse(app.file(store.ENTRIES_FILE))
   assert.equal(doc.entries.length, 14)
@@ -49,7 +49,7 @@ test('the first start of 0.3.0 moves the entries out of the settings, keeps a co
   assert.equal(app.pluginOptions.configuration.timeZoneSource, 'follow')
   assert.equal(app.pluginOptions.enabled, true)
   // The copy is the whole settings file as it was: the way back to 0.2.1.
-  assert.deepEqual(JSON.parse(app.file(store.SETTINGS_COPY)), grace)
+  assert.deepEqual(JSON.parse(app.file(store.SETTINGS_COPY)), legacySettings)
 
   const status = call(route('GET /api/entries')).body
   assert.equal(status.entries.length, 14)
@@ -70,14 +70,14 @@ test('the first start of 0.3.0 moves the entries out of the settings, keeps a co
 
 test('entries that turn up in the settings again are not used, and are kept and removed', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
-  const app = fakeApp({}, JSON.parse(JSON.stringify(grace)))
+  const app = fakeApp({}, JSON.parse(JSON.stringify(legacySettings)))
   const first = started(app)
-  first.plugin.start(grace.configuration)
+  first.plugin.start(legacySettings.configuration)
   first.plugin.stop()
   const doc = app.file(store.ENTRIES_FILE)
 
   // As after going back to 0.2.1 and forward again.
-  app.pluginOptions = JSON.parse(JSON.stringify(grace))
+  app.pluginOptions = JSON.parse(JSON.stringify(legacySettings))
   app.pluginOptions.configuration.formulas = [{ inputs: [{ name: 'x', path: 'a.x' }], expression: 'x', output: 'a.y' }]
   const second = started(app)
   second.plugin.start(app.pluginOptions.configuration)

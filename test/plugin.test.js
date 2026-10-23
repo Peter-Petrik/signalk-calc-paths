@@ -48,15 +48,15 @@ function fakeApp (selfPaths = {}) {
     sendUpdate (values) {
       const timestamp = new Date().toISOString()
       for (const [p, value] of Object.entries(values)) {
-        for (const { callback } of app.subscriptions) {
-          callback({ context: 'vessels.self', updates: [{ $source: 'test', timestamp, values: [{ path: p, value }] }] })
+        for (const { callback: deliver } of app.subscriptions) {
+          deliver({ context: 'vessels.self', updates: [{ $source: 'test', timestamp, values: [{ path: p, value }] }] })
         }
       }
     },
     /** Pushes one value through every subscription, as the server would. */
     send (p, value) {
-      for (const { callback } of app.subscriptions) {
-        callback({ context: 'vessels.self', updates: [{ $source: 'test', timestamp: new Date().toISOString(), values: [{ path: p, value }] }] })
+      for (const { callback: deliver } of app.subscriptions) {
+        deliver({ context: 'vessels.self', updates: [{ $source: 'test', timestamp: new Date().toISOString(), values: [{ path: p, value }] }] })
       }
     },
     values () {
@@ -178,13 +178,13 @@ test('deltas without values, such as metadata, are ignored', (t) => {
   const app = fakeApp()
   const plugin = createPlugin(app)
   plugin.start(options)
-  const { callback } = app.subscriptions[0]
+  const { callback: deliver } = app.subscriptions[0]
   assert.doesNotThrow(() => {
-    callback({ context: 'vessels.self', updates: [{ meta: [{ path: 'el.current', value: { units: 'A' } }] }] })
-    callback({ context: 'vessels.self', updates: [{}] })
-    callback({ context: 'vessels.self' })
-    callback(null)
-    callback({ updates: [{ values: [null, { value: 1 }, { path: 'el.current', value: 'text' }] }] })
+    deliver({ context: 'vessels.self', updates: [{ meta: [{ path: 'el.current', value: { units: 'A' } }] }] })
+    deliver({ context: 'vessels.self', updates: [{}] })
+    deliver({ context: 'vessels.self' })
+    deliver(null)
+    deliver({ updates: [{ values: [null, { value: 1 }, { path: 'el.current', value: 'text' }] }] })
   })
   t.mock.timers.tick(1000)
   assert.deepEqual(app.values(), {})
@@ -369,19 +369,36 @@ test('values replayed when the subscription is made are judged by their real age
 
 test('starting twice leaves one timer and one subscription', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
-  const app = fakeApp()
-  const plugin = createPlugin(app)
-  plugin.start(options)
-  plugin.start(options)
-  // The first start's subscription was released by the second.
-  assert.equal(app.unsubscribed, 1)
-  app.subscriptions.at(-1).callback({ updates: [{ values: [{ path: 'el.current', value: 5 }, { path: 'el.voltage', value: 24 }] }] })
-  t.mock.timers.tick(1000)
-  const powerMessages = app.messages.filter(({ delta }) => delta.updates.some((u) => (u.values || []).some((v) => v.path === 'el.power')))
-  assert.equal(powerMessages.length, 1)
-  plugin.stop()
-  // Nothing is left running to throw after the stop.
-  assert.doesNotThrow(() => t.mock.timers.tick(5000))
+  // The intervals set and not cleared, counted through the mocked timer
+  // functions; they are put back before the mock timers are reset.
+  const set = globalThis.setInterval
+  const clear = globalThis.clearInterval
+  const live = new Set()
+  globalThis.setInterval = (...args) => { const id = set(...args); live.add(id); return id }
+  globalThis.clearInterval = (id) => { live.delete(id); return clear(id) }
+  try {
+    const app = fakeApp()
+    const plugin = createPlugin(app)
+    plugin.start(options)
+    plugin.start(options)
+    // The first start's timer and subscription were released by the second.
+    assert.equal(live.size, 1)
+    assert.equal(app.unsubscribed, 1)
+    app.subscriptions.at(-1).callback({ updates: [{ values: [{ path: 'el.current', value: 5 }, { path: 'el.voltage', value: 24 }] }] })
+    t.mock.timers.tick(1000)
+    const powerMessages = app.messages.filter(({ delta }) => delta.updates.some((u) => (u.values || []).some((v) => v.path === 'el.power')))
+    assert.equal(powerMessages.length, 1)
+    plugin.stop()
+    // Nothing is left running after the stop. Under the mock timers a
+    // timer left behind cannot keep the test process alive; it is counted.
+    assert.equal(live.size, 0)
+    const sent = app.messages.length
+    t.mock.timers.tick(5000)
+    assert.equal(app.messages.length, sent)
+  } finally {
+    globalThis.setInterval = set
+    globalThis.clearInterval = clear
+  }
 })
 
 test('a failure inside the timer is reported, not thrown into the server', (t) => {
@@ -933,7 +950,7 @@ test('an old value handed over while running is ignored and counted', (t) => {
   const plugin = createPlugin(app)
   plugin.start(settings)
   const push = ($source, timestamp, path, value) => {
-    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
+    for (const { callback: deliver } of app.subscriptions) deliver({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
   }
   push('victron.newname', '2026-10-11T08:00:00.000Z', 'ref.today', 0)
   app.send('m.total', 1000)
@@ -972,7 +989,7 @@ test('a time stamp from the future cannot make a path deaf', (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.parse('2026-10-11T08:00:00Z') })
   const settings = { timeZone: 'UTC', counters: [{ input: 'm.total', output: 'm.today', resets: 'manual', staleTimeout: 0 }] }
   const push = (app, $source, timestamp, path, value) => {
-    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
+    for (const { callback: deliver } of app.subscriptions) deliver({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path, value }] }] })
   }
 
   // Held at start-up: a value stamped a day ahead by a source that then
@@ -1011,7 +1028,7 @@ test('a source whose clock runs behind loses its first value only', (t) => {
   const plugin = createPlugin(app)
   plugin.start(settings)
   const push = ($source, timestamp, value) => {
-    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 'm.total', value }] }] })
+    for (const { callback: deliver } of app.subscriptions) deliver({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 'm.total', value }] }] })
   }
   push('server.clock', '2026-10-11T08:00:00.000Z', 100)
   // A second source takes over; its own clock is ten minutes behind.
@@ -1072,7 +1089,7 @@ test('a source seen before is read again when it sends something new, whatever i
   const plugin = createPlugin(app)
   plugin.start(settings)
   const push = ($source, timestamp, value) => {
-    for (const { callback } of app.subscriptions) callback({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 's.state', value }] }] })
+    for (const { callback: deliver } of app.subscriptions) deliver({ context: 'vessels.self', updates: [{ $source, timestamp, values: [{ path: 's.state', value }] }] })
   }
   push('a', '2026-10-11T08:00:00.000Z', false)
   push('b', '2026-10-11T08:00:00.500Z', false)

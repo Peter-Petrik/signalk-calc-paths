@@ -112,6 +112,20 @@
     }
   }
 
+  /**
+   * Reads a typed number. A comma is taken as the decimal mark when the
+   * text has no point, so "1,5" reads as 1.5; a text with both, such as
+   * "1.234,5", is not a number. Gives NaN for anything that is not one.
+   */
+  function readNumber (text) {
+    const trimmed = String(text).trim()
+    // A decimal comma counts as the point, as on the server. A comma
+    // followed by exactly three digits may separate thousands, so such text
+    // is left for the server to refuse with an explanation.
+    if (!/^[-+]?\d*,\d+$/.test(trimmed)) return Number(trimmed)
+    return /,\d{3}$/.test(trimmed) ? NaN : Number(trimmed.replace(',', '.'))
+  }
+
   function escapeRegExp (text) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
@@ -129,9 +143,18 @@
       return node
     }
     known.sort((a, b) => b.length - a.length)
-    const pattern = new RegExp(`(?<![A-Za-z0-9_.-])(${known.map(escapeRegExp).join('|')})(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_-])`, 'g')
+    const pattern = new RegExp(`(${known.map(escapeRegExp).join('|')})(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_-])`, 'g')
+    // A path counts only where it does not continue a word or a longer
+    // path. The character before it is checked here rather than in the
+    // pattern, as Safari before 16.4 cannot read a pattern that looks back.
+    const joined = /[A-Za-z0-9_.-]/
     let last = 0
-    for (const match of text.matchAll(pattern)) {
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > 0 && joined.test(text[match.index - 1])) {
+        pattern.lastIndex = match.index + 1
+        continue
+      }
       if (match.index > last) node.append(text.slice(last, match.index))
       node.append(element('code', 'path', match[0]))
       last = match.index + match[0].length
@@ -188,6 +211,7 @@
     everyday,
     shownUnit,
     figure,
+    readNumber,
     remembered,
     writeWithPaths
   }

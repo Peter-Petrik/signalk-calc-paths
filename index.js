@@ -24,7 +24,7 @@ const { performance } = require('perf_hooks')
 
 const { normalizeConfig } = require('./lib/config')
 const { Engine, toNumber } = require('./lib/engine')
-const { compileFormula } = require('./lib/formula')
+const { checkName, compileFormula } = require('./lib/formula')
 const openApi = require('./lib/openapi')
 const { entryFields, entryOrder, schemaFor, uiSchema } = require('./lib/schema')
 const { loadState, saveState } = require('./lib/state')
@@ -79,6 +79,14 @@ module.exports = function (app) {
   // Decides which time zone is in use; see lib/timezone.js.
   let zones = null
   let stateProblem = null
+  // Set while the state file exists but could not be read. Nothing is
+  // saved then: a save would replace a file that may hold every total.
+  // The next start reads it again.
+  let stateUnreadable = false
+  // True from start() to stop(): while the server has the plugin switched
+  // on. The editor's routes act only then, so that an editor left open
+  // cannot start the engine of a plugin the server lists as disabled.
+  let running = false
   let unsubscribes = []
   let tickTimer = null
   // Saves the totals when the process ends without stopping the plugin
@@ -120,10 +128,11 @@ module.exports = function (app) {
   /**
    * Writes the engine state to the plugin's data directory. A failed save
    * is reported and retried on the next interval; it never stops the
-   * calculations.
+   * calculations. Nothing is written while the state file could not be
+   * read; see stateUnreadable.
    */
   function save () {
-    if (!engine) return
+    if (!engine || stateUnreadable) return
     try {
       saveState(app.getDataDirPath(), { ...engine.serialize(wallNow()), zone: zones.serialize() })
       lastSaveMono = monoNow()
@@ -215,9 +224,10 @@ module.exports = function (app) {
             updates: [{ values: publications.map(({ path, value }) => ({ path, value })) }]
           })
         } catch (err) {
-          // A null is sent only once, so one that did not get out is marked
-          // as still owed; a number goes out again by itself.
-          for (const { path, value } of publications) if (value === null) engine.onServer.add(path)
+          // The engine sends a value only when it changes, or a null only
+          // once, so what did not get out is handed back to be sent again
+          // at the next pass.
+          engine.republish(publications)
           throw err
         }
       }
@@ -228,16 +238,6 @@ module.exports = function (app) {
       app.setPluginError(`Calculation pass failed: ${err.message}`)
       lastStatus = null
     }
-  }
-
-  /**
-   * How old a value is, from the timestamp the server keeps with it. A
-   * timestamp that is missing, unreadable or in the future (a source with
-   * a wrong clock) is read as "just now" rather than as a negative age.
-   */
-  function ageOf (timestamp, wall) {
-    const stamped = Date.parse(timestamp)
-    return Number.isFinite(stamped) ? Math.max(0, wall - stamped) : 0
   }
 
   /**
@@ -342,7 +342,7 @@ module.exports = function (app) {
 
   /**
    * Reads a time stamp for comparing values with each other. One that is
-   * missing or unreadable counts as now, as in ageOf(). So does one from
+   * missing or unreadable counts as now. So does one from
    * the future: a source with a clock that runs ahead must not outrank
    * every value that arrives after it.
    */
@@ -681,6 +681,7 @@ module.exports = function (app) {
     // lost by making sure: a second timer or subscription left running
     // would publish every value twice.
     plugin.stop()
+    running = true
     settingsOptions = options && typeof options === 'object' ? options : {}
     startedAt = wallNow()
     startedTimeZone = settingsOptions.timeZone
@@ -701,11 +702,19 @@ module.exports = function (app) {
       return
     }
     const document = takeOverLists(loadedEntries.doc, settingsOptions, dir)
+    startEngine(document, readState(dir))
+  }
 
+  /**
+   * Reads the state file and notes what is wrong with it, for the status
+   * and for save(). Returns the state, or null to start every total afresh.
+   */
+  function readState (dir) {
     const loaded = loadState(dir)
     stateProblem = loaded.error
+    stateUnreadable = loaded.unreadable === true
     if (stateProblem) app.error(stateProblem)
-    startEngine(document, loaded.state)
+    return loaded.state
   }
 
   /**
@@ -728,9 +737,7 @@ module.exports = function (app) {
       // Totals saved for outputs the new set does not use are kept in the
       // state file for 30 days; see Engine#serialize().
       blocked = null
-      const loaded = loadState(dir)
-      stateProblem = loaded.error
-      startEngine(document, loaded.state)
+      startEngine(document, readState(dir))
       return { kept: 0, started: normalized.entries.filter((e) => e.enabled && !e.error).length }
     }
 
@@ -790,6 +797,11 @@ module.exports = function (app) {
     engine = null
     normalized = null
     zones = null
+    // A file found unusable at this start is looked at afresh at the next;
+    // until then the routes answer as for a stopped plugin.
+    blocked = null
+    stateUnreadable = false
+    running = false
   }
 
   /** Identifies a version of the entries, so that two editors cannot overwrite each other unawares. */
@@ -813,12 +825,6 @@ module.exports = function (app) {
   }
 
   /**
-   * How old the value of a path is, in milliseconds, or null when that is
-   * not known. The plugin's own record of when it received the value comes
-   * first; for a path it does not read, the server's time stamp, which is
-   * set by the source's clock.
-   */
-  /**
    * Why the preview counts an input as its value when stale, as the engine
    * would: 'none' for a path that has had nothing, 'invalid' for one that
    * holds no number, 'stale' for one older than the stale timeout, null to
@@ -839,6 +845,12 @@ module.exports = function (app) {
     return staleMs > 0 && age !== null && age > staleMs ? 'stale' : null
   }
 
+  /**
+   * How old the value of a path is, in milliseconds, or null when that is
+   * not known. The plugin's own record of when it received the value comes
+   * first; for a path it does not read, the server's time stamp, which is
+   * set by the source's clock.
+   */
   function valueAge (path) {
     const producer = engine && engine.byOutput.get(path)
     if (producer) return producer.inputMono === null ? null : monoNow() - producer.inputMono
@@ -854,6 +866,26 @@ module.exports = function (app) {
   }
 
   /**
+   * Why a formula sent for a preview could not be saved as it is, or null:
+   * an expression or a path longer than an entry may hold, more inputs than
+   * an entry may have, or a short name a save would refuse or that is used
+   * twice. The messages follow those of a save.
+   */
+  function previewProblem (count, inputs, expression) {
+    if (expression.length > store.MAX_TEXT) return `the expression is longer than ${store.MAX_TEXT} characters`
+    if (count > store.MAX_INPUTS) return `the formula has more than ${store.MAX_INPUTS} inputs`
+    const seen = new Set()
+    for (const input of inputs) {
+      if (input.name.length > store.MAX_TEXT || input.path.length > store.MAX_TEXT) return `an input has a text longer than ${store.MAX_TEXT} characters`
+      const nameProblem = checkName(input.name)
+      if (nameProblem) return nameProblem
+      if (seen.has(input.name)) return `the short name "${input.name}" is used twice`
+      seen.add(input.name)
+    }
+    return null
+  }
+
+  /**
    * HTTP interface under /plugins/signalk-calc-paths.
    *
    * Plugin routes are admin-only unless registered through router.access().
@@ -863,13 +895,17 @@ module.exports = function (app) {
    * keeps every route admin-only.
    */
   plugin.registerWithRouter = function (router) {
+    // The routes stay registered while the plugin is switched off, and the
+    // page may still be open; each says so instead of acting.
+    const notRunning = (res) => res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+
     const listEntries = (req, res) => {
-      if (!engine) {
-        if (blocked) {
-          res.status(503).json({ error: blocked, blocked: true })
-          return
-        }
-        res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+      if (running && !engine && blocked) {
+        res.status(503).json({ error: blocked, blocked: true })
+        return
+      }
+      if (!running || !engine) {
+        notRunning(res)
         return
       }
       const settings = normalized.settings
@@ -903,7 +939,7 @@ module.exports = function (app) {
     }
 
     const resetEntry = (req, res) => {
-      if (!engine) {
+      if (!running || !engine) {
         res.status(503).json({ error: 'The plugin is not running.' })
         return
       }
@@ -920,8 +956,8 @@ module.exports = function (app) {
     // The entries as saved, with the field definitions the editor builds
     // its forms from.
     const getConfig = (req, res) => {
-      if (!engine && !blocked) {
-        res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+      if (!running || (!engine && !blocked)) {
+        notRunning(res)
         return
       }
       const document = blocked ? { version: store.ENTRIES_VERSION, groups: [], entries: [] } : doc
@@ -940,8 +976,10 @@ module.exports = function (app) {
     // then names each fault and the entry it belongs to. An entry that is
     // switched off may be saved unfinished.
     const putConfig = (req, res) => {
-      if (!engine && !blocked) {
-        res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+      // A save puts the entries to work, which starts the engine when the
+      // entries file could not be used; a plugin switched off must stay off.
+      if (!running || (!engine && !blocked)) {
+        notRunning(res)
         return
       }
       const body = req.body && typeof req.body === 'object' ? req.body : {}
@@ -956,13 +994,13 @@ module.exports = function (app) {
         res.status(400).json({ error: 'The entries could not be saved.', errors })
         return
       }
-      const trial = normalizeConfig(settingsOptions, checked)
+      const candidate = normalizeConfig(settingsOptions, checked)
       // entryErrors names each entry's first fault, entryFaults every fault
       // with the field it lies in, for the editor to mark.
       const entryErrors = Object.create(null)
       const entryFaults = Object.create(null)
       let refused = 0
-      for (const entry of trial.entries) {
+      for (const entry of candidate.entries) {
         if (!entry.error) continue
         entryErrors[entry.id] = entry.error
         entryFaults[entry.id] = entry.faults
@@ -976,8 +1014,10 @@ module.exports = function (app) {
       try {
         outcome = applyDocument(checked)
       } catch (err) {
+        // The message can name the data folder's full path, which is no
+        // business of a client; the server log keeps the whole of it.
         app.error(`Could not save the entries: ${err.stack || err.message}`)
-        res.status(500).json({ error: `The entries could not be saved: ${err.message}` })
+        res.status(500).json({ error: 'The entries could not be saved. The server log has the details.' })
         return
       }
       res.json({ saved: true, revision: revisionOf(doc), ...outcome, entryErrors, entryFaults })
@@ -1019,11 +1059,25 @@ module.exports = function (app) {
 
     // Works out a formula on the current values, as the editor's preview.
     const preview = (req, res) => {
+      if (!running) {
+        notRunning(res)
+        return
+      }
       const body = req.body && typeof req.body === 'object' ? req.body : {}
       const inputs = Array.isArray(body.inputs) ? body.inputs.filter((i) => i && typeof i.name === 'string' && typeof i.path === 'string') : []
+      const expression = typeof body.expression === 'string' ? body.expression : ''
+      // What a save refuses is refused here too, with the same limits and
+      // the same check of the short names: the editor asks for a preview as
+      // a formula is typed, and a preview must not work out what can never
+      // be saved, nor take the time a very long expression takes to parse.
+      const problem = previewProblem(Array.isArray(body.inputs) ? body.inputs.length : 0, inputs, expression)
+      if (problem) {
+        res.json({ error: problem })
+        return
+      }
       let compiled
       try {
-        compiled = compileFormula(typeof body.expression === 'string' ? body.expression : '', inputs.map((i) => i.name))
+        compiled = compileFormula(expression, inputs.map((i) => i.name))
       } catch (err) {
         res.json({ error: err.message })
         return

@@ -18,7 +18,7 @@
  */
 
 ;(function () {
-  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, api, button, element, everyday, figure, shownUnit } = window.CalcPaths
+  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, api, button, element, everyday, figure, readNumber, shownUnit } = window.CalcPaths
 
   const view = document.getElementById('edit-view')
   const PATHS_POLL_MS = 10000
@@ -68,11 +68,17 @@
     // Counts every change, so a save can tell whether more changes were
     // made while it was on its way.
     changes: 0,
-    sending: false
+    sending: false,
+    // The revision of a newer set on the server, once the editor has said
+    // that its unsaved changes cannot be saved over it.
+    staleRevision: null
   }
 
   let pathsTimer = null
   let visible = false
+  // The id of the entry whose card is being dragged, so that a drop of
+  // anything else, such as text dragged into a field, is left alone.
+  let draggedId = null
 
   // ------------------------------------------------------------- helpers
 
@@ -161,7 +167,6 @@
 
   // ------------------------------------------------------------- paths
 
-  /** What a path holds now, in a few words, for the hint under a path field. */
   // The units of the figures a cycles entry publishes (CYCLE_FIGURES in
   // lib/config.js), for a path that is a cycles entry's output.
   const CYCLE_UNITS = { onMedian: 's', offMedian: 's', periodMedian: 's', duty: 'ratio', lastOn: 's', cycles: '' }
@@ -215,7 +220,7 @@
     }
     const store = () => {
       const text = control.value.trim()
-      const number = Number(text)
+      const number = readNumber(text)
       if (original && text === original.text) holder[field] = original.value
       else if (text === '') delete holder[field]
       else holder[field] = Number.isFinite(number) ? shown.store(number) : text
@@ -325,25 +330,40 @@
 
   // ------------------------------------------------------------- loading
 
-  async function load () {
+  /**
+   * Reads the set the server holds. Gives the answer's body, or the text
+   * that says why there is none.
+   */
+  async function fetchSet () {
     let result
     try {
       result = await api('/config')
     } catch (err) {
-      showMessage('The server could not be reached.')
-      return false
+      return { problem: 'The server could not be reached.' }
     }
     if (result.status === 401 || result.status === 403) {
       state.permitted = false
-      showMessage('This login may read the calculated paths but not change them. Log in as a user with read/write permission to edit the entries.')
-      return false
+      return { problem: 'This login may read the calculated paths but not change them. Log in as a user with read/write permission to edit the entries.' }
     }
-    if (!result.ok) {
-      showMessage(result.body && result.body.error ? result.body.error : `The server answered ${result.status}.`)
-      return false
+    if (!result.ok || !result.body) {
+      return { problem: result.body && result.body.error ? result.body.error : `The server answered ${result.status}.` }
     }
     state.permitted = true
-    const body = result.body
+    return { body: result.body }
+  }
+
+  async function load () {
+    const { body, problem } = await fetchSet()
+    if (problem) {
+      showMessage(problem)
+      return false
+    }
+    take(body)
+    return true
+  }
+
+  /** Makes a set read from the server both the saved set and the copy edited. */
+  function take (body) {
     state.saved = { groups: body.groups, entries: body.entries }
     state.savedKey = canonical(state.saved)
     state.revision = body.revision
@@ -356,8 +376,67 @@
     state.errors = Object.create(null)
     state.faults = Object.create(null)
     state.loaded = true
+    state.staleRevision = null
     window.CalcPaths.app.setUnsaved(false)
-    return true
+  }
+
+  /**
+   * Looks whether the set on the server is still the one this editor read.
+   * Without unsaved changes a newer set is taken at once, and focus stays
+   * on the control it was on. With unsaved changes the editor says so
+   * straight away, before a save would be refused, and keeps the changes.
+   */
+  async function checkRevision () {
+    if (!state.loaded || state.sending) return
+    const before = state.revision
+    const changes = state.changes
+    const { body } = await fetchSet()
+    // Nothing is done with an answer that a save, or an edit, has overtaken.
+    if (!body || !visible || state.sending || state.revision !== before) return
+    if (body.revision === state.revision && body.blocked === state.blocked) return
+    if (state.dirty) {
+      if (state.staleRevision === body.revision) return
+      state.staleRevision = body.revision
+      showInPlace(changedElsewhere('The entries were changed elsewhere since this editor read them, so the changes here cannot be saved over them. Export them first to keep them, then reload.'))
+      return
+    }
+    if (state.changes !== changes) return
+    // A question being answered on the page is left alone: the set is
+    // taken on a later look.
+    const active = document.activeElement
+    if (view.contains(active) && active.closest('.confirm')) return
+    if ([...view.querySelectorAll('.adder-choices')].some((choices) => !choices.hidden)) return
+    const focus = view.contains(active) ? selectorFor(active) : null
+    take(body)
+    state.notice = notice('info', 'The entries were changed elsewhere. The editor now shows them as saved there.')
+    await loadPaths()
+    render(focus)
+  }
+
+  /** A selector that finds a control again after the page is drawn anew. */
+  function selectorFor (control) {
+    if (control.id) return `[id="${window.CSS.escape(control.id)}"]`
+    if (control.dataset.focus) return `[data-focus="${window.CSS.escape(control.dataset.focus)}"]`
+    if (control.dataset.groupName) return `[data-group-name="${window.CSS.escape(control.dataset.groupName)}"]`
+    return null
+  }
+
+  /** The notice for a set changed elsewhere, with a way to keep the changes made here. */
+  function changedElsewhere (text) {
+    const box = element('div', 'notice is-error')
+    box.tabIndex = -1
+    box.append(element('p', '', text))
+    box.append(button('Reload, losing the changes here', '', async () => { await reopen() }), ' ', button('Export the changes here first', 'is-quiet', exportSet))
+    return box
+  }
+
+  /** Shows a notice above the entries without drawing the page anew. */
+  function showInPlace (box) {
+    const holder = view.querySelector('.editor-notices')
+    if (!holder) return
+    if (state.notice && state.notice.parentNode === holder) state.notice.replaceWith(box)
+    else holder.append(box)
+    state.notice = box
   }
 
   /** Asks the server, without showing anything, whether this login may edit. */
@@ -409,15 +488,45 @@
 
     view.replaceChildren(toolbar, notices, blocks, list, units)
     updateToolbar()
+    watchToolbar(toolbar)
     if (focus) {
-      // A selector built from an id in an imported file may not parse.
-      let target = null
-      try {
-        target = view.querySelector(focus)
-      } catch (err) {
-        target = null
+      const target = find(focus)
+      if (target) {
+        target.focus()
+        // On a narrow screen a button under a folded "More" cannot take
+        // focus; the More button takes it instead.
+        const more = view.querySelector('.toolbar-more-toggle')
+        if (document.activeElement !== target && more && target.closest('.toolbar-more')) more.focus()
       }
-      if (target) target.focus()
+    }
+  }
+
+  /** The first element a selector finds in the editor, or null. */
+  function find (selector) {
+    // Every id put in a selector is escaped; this guards against the rest.
+    try {
+      return view.querySelector(selector)
+    } catch (err) {
+      return null
+    }
+  }
+
+  /**
+   * Keeps the page's scroll padding as tall as the editing bar that stays
+   * at the top, so a control that takes focus is never hidden under it.
+   */
+  let toolbarWatch = null
+  function watchToolbar (toolbar) {
+    if (toolbarWatch) toolbarWatch.disconnect()
+    const apply = () => {
+      if (!visible) return
+      const margin = parseFloat(window.getComputedStyle(toolbar).marginBottom) || 0
+      document.documentElement.style.scrollPaddingTop = `${Math.ceil(toolbar.offsetHeight + margin)}px`
+    }
+    apply()
+    if (window.ResizeObserver) {
+      toolbarWatch = new window.ResizeObserver(apply)
+      toolbarWatch.observe(toolbar)
     }
   }
 
@@ -435,10 +544,11 @@
       const group = { id: newId('g'), name: 'New group' }
       state.groups.push(group)
       markDirty()
-      render(`[data-group-name="${group.id}"]`)
+      const selector = `[data-group-name="${window.CSS.escape(group.id)}"]`
+      render(selector)
       // The new group is added at the end of the page, which may be out of
       // sight: it is brought to the middle, its name selected to type over.
-      const field = view.querySelector(`[data-group-name="${group.id}"]`)
+      const field = find(selector)
       if (field) {
         field.closest('section').scrollIntoView({ block: 'center' })
         field.select()
@@ -622,10 +732,14 @@
     handle.addEventListener('dragstart', (event) => {
       event.dataTransfer.setData('text/plain', entry.id)
       event.dataTransfer.effectAllowed = 'move'
+      draggedId = entry.id
       try { event.dataTransfer.setDragImage(item, 20, 20) } catch (err) { /* not offered by every browser */ }
       item.classList.add('is-dragging')
     })
-    handle.addEventListener('dragend', () => item.classList.remove('is-dragging'))
+    handle.addEventListener('dragend', () => {
+      item.classList.remove('is-dragging')
+      draggedId = null
+    })
 
     const expanded = state.expanded.has(entry.id)
     const toggle = element('button', 'card-toggle')
@@ -664,7 +778,7 @@
     const body = element('div', 'card-body')
     body.hidden = !expanded
     const form = element('div', 'card-form')
-    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], unitFields: [], rows: new Map(), chain: null, preview: null, previewTimer: null }
+    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], unitFields: [], rows: new Map(), chain: null, preview: null, previewTimer: null, previewAsked: 0 }
     for (const field of orderedFields(entry.type)) form.append(renderField(entry, field, live))
     const chain = element('p', 'card-chain')
     live.chain = chain
@@ -683,7 +797,7 @@
     groupSelect.addEventListener('change', () => {
       moveToGroup(entry, groupSelect.value || null, null)
       state.expanded.add(entry.id)
-      render(`[data-focus="toggle-${entry.id}"]`)
+      render(`[data-focus="${window.CSS.escape(`toggle-${entry.id}`)}"]`)
     })
     const groupLabel = element('label', 'card-group')
     groupLabel.append('Group ', groupSelect)
@@ -738,9 +852,9 @@
       if (!row) return null
       if (match[2] === 'path') return row.querySelector('.input-path')
       if (match[2] === 'name') return row.querySelector('.input-name')
-      return row.querySelector(`[data-setting="${match[2]}"]`)
+      return row.querySelector(`[data-setting="${window.CSS.escape(match[2])}"]`)
     }
-    return item.querySelector(`[id="f-${entry.id}-${field}"]`)
+    return item.querySelector(`[id="${window.CSS.escape(`f-${entry.id}-${field}`)}"]`)
   }
 
   /**
@@ -856,7 +970,7 @@
       control.addEventListener('input', () => {
         const text = control.value
         if (numeric) {
-          const number = Number(text)
+          const number = readNumber(text)
           if (text.trim() === '') delete entry[field]
           else entry[field] = Number.isFinite(number) ? number : text
         } else {
@@ -949,7 +1063,7 @@
         const staleUnit = element('span', 'input-stale-unit', unitsOf(input.path) || '')
         staleBox.addEventListener('input', () => {
           const text = staleBox.value.trim()
-          const number = Number(text)
+          const number = readNumber(text)
           if (text === '') delete input.whenStale
           else input.whenStale = Number.isFinite(number) ? number : text
           markDirty()
@@ -1193,7 +1307,6 @@
     }
   }
 
-  /** Works the formula out on the current values, a moment after typing stops. */
   /** Names the inputs a preview counted as their value when stale. */
   function describeSubstituted (substituted) {
     if (!Array.isArray(substituted) || substituted.length === 0) return ''
@@ -1205,8 +1318,12 @@
     if (!live.preview) return
     clearTimeout(live.previewTimer)
     live.previewTimer = setTimeout(async () => {
+      // Each request is numbered, so that an answer overtaken by a later
+      // request, which may arrive after it, is not shown.
+      const asked = ++live.previewAsked
       const inputs = (entry.inputs || []).filter((input) => input.name && input.path)
       if (!entry.expression) {
+        live.preview.className = 'field-preview'
         live.preview.textContent = ''
         return
       }
@@ -1214,12 +1331,15 @@
       try {
         result = await api('/preview', { method: 'POST', body: { inputs, expression: entry.expression, staleTimeout: entry.staleTimeout } })
       } catch (err) {
-        return
+        result = null
       }
-      const body = result.body || {}
+      if (asked !== live.previewAsked) return
+      const body = (result && result.body) || {}
       live.preview.className = 'field-preview'
-      if (!result.ok) {
-        live.preview.textContent = ''
+      if (!result) {
+        live.preview.textContent = 'Not checked: the server could not be reached.'
+      } else if (!result.ok) {
+        live.preview.textContent = `Not checked: the server answered ${result.status}.`
       } else if (body.error) {
         live.preview.textContent = `Not yet: ${body.error}.`
         live.preview.classList.add('is-error')
@@ -1275,7 +1395,7 @@
     state.entries.splice(last === -1 ? state.entries.length : last + 1, 0, entry)
     state.expanded.add(entry.id)
     markDirty()
-    render(`#f-${entry.id}-name`)
+    render(`[id="${window.CSS.escape(`f-${entry.id}-name`)}"]`)
   }
 
   function duplicateEntry (entry) {
@@ -1283,7 +1403,7 @@
     state.entries.splice(state.entries.indexOf(entry) + 1, 0, copy)
     state.expanded.add(copy.id)
     markDirty()
-    render(`#f-${copy.id}-output`)
+    render(`[id="${window.CSS.escape(`f-${copy.id}-output`)}"]`)
   }
 
   function deleteEntry (entry) {
@@ -1294,7 +1414,7 @@
     delete state.errors[entry.id]
     delete state.faults[entry.id]
     markDirty()
-    render(next ? `[data-focus="toggle-${next.id}"]` : '#editor-add-group')
+    render(next ? `[data-focus="${window.CSS.escape(`toggle-${next.id}`)}"]` : '#editor-add-group')
   }
 
   /** Moves an entry one place up or down within its block. */
@@ -1312,7 +1432,7 @@
     // when that arrow is now at the end of the list.
     const position = siblings.indexOf(entry) + step
     const focus = (step < 0 && position === 0) || (step > 0 && position === siblings.length - 1) ? (step < 0 ? 'down' : 'up') : (step < 0 ? 'up' : 'down')
-    render(`[data-focus="${focus}-${entry.id}"]`)
+    render(`[data-focus="${window.CSS.escape(`${focus}-${entry.id}`)}"]`)
   }
 
   /** Moves an entry into a block, before another entry or at its end. */
@@ -1339,7 +1459,7 @@
     markDirty()
     const position = index + step
     const focus = (step < 0 && position === 0) || (step > 0 && position === state.groups.length - 1) ? (step < 0 ? 'down' : 'up') : (step < 0 ? 'up' : 'down')
-    render(`[data-focus="group-${focus}-${group.id}"]`)
+    render(`[data-focus="${window.CSS.escape(`group-${focus}-${group.id}`)}"]`)
   }
 
   function deleteGroup (group) {
@@ -1356,7 +1476,7 @@
   /** A drop on a card puts the dragged entry before or after it. */
   function addCardDrop (item, entry) {
     item.addEventListener('dragover', (event) => {
-      if (!event.dataTransfer.types.includes('text/plain')) return
+      if (!draggedId) return
       event.preventDefault()
       event.stopPropagation()
       const box = item.getBoundingClientRect()
@@ -1366,11 +1486,13 @@
     })
     item.addEventListener('dragleave', () => item.classList.remove('drop-before', 'drop-after'))
     item.addEventListener('drop', (event) => {
+      if (!draggedId) return
       event.preventDefault()
       event.stopPropagation()
       const after = item.classList.contains('drop-after')
       item.classList.remove('drop-before', 'drop-after')
-      const dragged = entryById(event.dataTransfer.getData('text/plain'))
+      const dragged = entryById(draggedId)
+      draggedId = null
       if (!dragged || dragged === entry) return
       const group = entry.group || null
       let before = entry.id
@@ -1380,14 +1502,14 @@
         before = next ? next.id : null
       }
       moveToGroup(dragged, group, before)
-      render(`[data-focus="toggle-${dragged.id}"]`)
+      render(`[data-focus="${window.CSS.escape(`toggle-${dragged.id}`)}"]`)
     })
   }
 
   /** A drop on the list itself, outside any card, puts the entry at its end. */
   function addDropTarget (list, groupId) {
     list.addEventListener('dragover', (event) => {
-      if (!event.dataTransfer.types.includes('text/plain')) return
+      if (!draggedId) return
       event.preventDefault()
       list.classList.add('is-drop-target')
     })
@@ -1395,12 +1517,14 @@
       if (!list.contains(event.relatedTarget)) list.classList.remove('is-drop-target')
     })
     list.addEventListener('drop', (event) => {
+      if (!draggedId) return
       event.preventDefault()
       list.classList.remove('is-drop-target')
-      const dragged = entryById(event.dataTransfer.getData('text/plain'))
+      const dragged = entryById(draggedId)
+      draggedId = null
       if (!dragged) return
       moveToGroup(dragged, groupId, null)
-      render(`[data-focus="toggle-${dragged.id}"]`)
+      render(`[data-focus="${window.CSS.escape(`toggle-${dragged.id}`)}"]`)
     })
   }
 
@@ -1536,30 +1660,28 @@
     }
     state.sending = false
     if (!result) {
-      setNotice('error', 'The server could not be reached. Nothing was saved.')
+      setNotice('error', 'The server could not be reached. Nothing was saved.', true)
       return
     }
     const answer = result.body || {}
     if (result.status === 409) {
-      const box = element('div', 'notice is-error')
-      box.append(element('p', '', answer.error || 'The entries were changed elsewhere.'))
-      box.append(button('Reload, losing the changes here', '', async () => { await reopen() }), ' ', button('Export the changes here first', 'is-quiet', exportSet))
-      state.notice = box
+      state.notice = changedElsewhere(answer.error || 'The entries were changed elsewhere.')
       render()
+      focusNotice()
       return
     }
     if (result.status === 401 || result.status === 403) {
-      setNotice('error', 'This login may not change the entries. Nothing was saved.')
+      setNotice('error', 'This login may not change the entries. Nothing was saved.', true)
       return
     }
     if (!result.ok) {
       takeFaults(answer)
       for (const id of Object.keys(state.errors)) state.expanded.add(id)
       const lines = [answer.error || `The server answered ${result.status}. Nothing was saved.`, ...(answer.errors || [])]
-      setNotice('error', lines.join(' '))
+      setNotice('error', lines.join(' '), true)
       const first = Object.keys(state.errors)[0]
       if (first) {
-        const card = view.querySelector(`.card[data-id="${first}"]`)
+        const card = find(`.card[data-id="${window.CSS.escape(first)}"]`)
         if (card) card.scrollIntoView({ block: 'center' })
       }
       return
@@ -1591,14 +1713,27 @@
    * to it, for when the control that was used is now disabled.
    */
   function setNotice (kind, text, focus) {
-    state.notice = element('p', `notice is-${kind}`, text)
-    state.notice.tabIndex = -1
+    state.notice = notice(kind, text)
     render()
     const target = view.querySelector('.editor-notices .notice')
     if (target) {
       target.scrollIntoView({ block: 'nearest' })
       if (focus) target.focus()
     }
+  }
+
+  /** A message for above the entries, able to take focus. */
+  function notice (kind, text) {
+    const box = element('p', `notice is-${kind}`, text)
+    box.tabIndex = -1
+    return box
+  }
+
+  /** Moves keyboard focus to the notice shown above the entries. */
+  function focusNotice () {
+    if (!state.notice || !state.notice.isConnected) return
+    state.notice.scrollIntoView({ block: 'nearest' })
+    state.notice.focus()
   }
 
   function discardAll () {
@@ -1617,11 +1752,16 @@
     })
   }
 
+  /** Reloads the set from the server, dropping the changes made here. */
   async function reopen () {
-    if (await load()) {
-      state.notice = null
-      render()
+    const { body, problem } = await fetchSet()
+    if (problem) {
+      setNotice('error', `${problem} Nothing was reloaded.`, true)
+      return
     }
+    take(body)
+    await loadPaths()
+    setNotice('info', 'Reloaded. The editor now shows the entries as saved on the server.', true)
   }
 
   // ------------------------------------------------------------- import, export
@@ -1676,33 +1816,83 @@
     return entry
   }
 
+  // An id as the plugin accepts it (validId() in lib/store.js): letters,
+  // digits, dashes and underscores, and no name every object carries.
+  const ID_PATTERN = /^[A-Za-z0-9_-]{1,40}$/
+  function validId (id) {
+    return typeof id === 'string' && ID_PATTERN.test(id) && !(id in {}) && id !== '__proto__'
+  }
+
+  // An exported set is a few kilobytes; a much larger file is not one.
+  const MAX_IMPORT_BYTES = 1024 * 1024
+
+  /**
+   * Reads an exported set. Groups and entries without an id, and entries
+   * of no known type, are left out; an id the plugin would refuse, or one
+   * used twice, is replaced by a new one, and the entries of a group keep
+   * their group. Throws on anything else it cannot read.
+   */
+  function readSet (data) {
+    const known = Object.create(null)
+    const used = new Set()
+    const groups = []
+    for (const g of data.groups) {
+      if (!g || typeof g !== 'object' || typeof g.id !== 'string') continue
+      const id = validId(g.id) && !used.has(g.id) ? g.id : newId('g')
+      used.add(id)
+      if (!Object.prototype.hasOwnProperty.call(known, g.id)) known[g.id] = id
+      groups.push({ id, name: String(g.name || 'Unnamed group') })
+    }
+    const entries = []
+    const usedEntries = new Set()
+    for (const e of data.entries) {
+      if (!e || typeof e !== 'object' || typeof e.id !== 'string') continue
+      if (!Object.prototype.hasOwnProperty.call(TYPES, e.type) || !Object.prototype.hasOwnProperty.call(state.fields, e.type)) continue
+      const id = validId(e.id) && !usedEntries.has(e.id) ? e.id : newId('e')
+      usedEntries.add(id)
+      const group = typeof e.group === 'string' && Object.prototype.hasOwnProperty.call(known, e.group) ? known[e.group] : null
+      entries.push({ ...cleanEntry(e), id, group })
+    }
+    return { groups, entries }
+  }
+
   function importSet (input) {
     const file = input.files && input.files[0]
     input.value = ''
     if (!file) return
+    if (file.size > MAX_IMPORT_BYTES) {
+      setNotice('error', `${file.name} is larger than 1 MB, too large for a set of entries. Nothing was imported.`, true)
+      return
+    }
     file.text().then((text) => {
       let data
       try {
         data = JSON.parse(text)
       } catch (err) {
-        setNotice('error', `${file.name} is not a JSON file. Nothing was imported.`)
+        setNotice('error', `${file.name} is not a JSON file. Nothing was imported.`, true)
         return
       }
       if (!data || !Array.isArray(data.entries) || !Array.isArray(data.groups)) {
-        setNotice('error', `${file.name} holds no entries exported from this page. Nothing was imported.`)
+        setNotice('error', `${file.name} holds no entries exported from this page. Nothing was imported.`, true)
         return
       }
-      state.groups = data.groups.filter((g) => g && typeof g.id === 'string').map((g) => ({ id: g.id, name: String(g.name || 'Unnamed group') }))
-      const known = new Set(state.groups.map((g) => g.id))
-      state.entries = data.entries.filter((e) => e && typeof e.id === 'string' && TYPES[e.type]).map((e) => ({ ...cleanEntry(e), group: known.has(e.group) ? e.group : null }))
+      let set
+      try {
+        set = readSet(data)
+      } catch (err) {
+        setNotice('error', `${file.name} could not be read as entries exported from this page. Nothing was imported.`, true)
+        return
+      }
+      state.groups = set.groups
+      state.entries = set.entries
       state.errors = Object.create(null)
       state.faults = Object.create(null)
       state.expanded.clear()
       markDirty()
       const groups = state.groups.length === 1 ? '1 group' : `${state.groups.length} groups`
       const entries = state.entries.length === 1 ? '1 entry' : `${state.entries.length} entries`
-      setNotice('info', `Imported ${entries} in ${groups} from ${file.name}. They replace the entries shown before, and are not saved yet.`)
-    }, () => setNotice('error', `${file.name} could not be read. Nothing was imported.`))
+      setNotice('info', `Imported ${entries} in ${groups} from ${file.name}. They replace the entries shown before, and are not saved yet.`, true)
+    }, () => setNotice('error', `${file.name} could not be read. Nothing was imported.`, true))
   }
 
   // ------------------------------------------------------------- the view
@@ -1716,7 +1906,6 @@
 
   window.CalcPaths.editor = {
     probe,
-    get dirty () { return state.dirty },
     async show () {
       visible = true
       // The header (the time zone in use) and the footer (version, last
@@ -1737,6 +1926,7 @@
             }
             return
           }
+          await checkRevision()
           loadPaths()
         }, PATHS_POLL_MS)
       }
@@ -1745,10 +1935,16 @@
         if (!(await load())) return
         await loadPaths()
         render()
+        return
       }
+      // The set may have been changed elsewhere while another view showed.
+      const toolbar = view.querySelector('.editor-toolbar')
+      if (toolbar) watchToolbar(toolbar)
+      await checkRevision()
     },
     hide () {
       visible = false
+      document.documentElement.style.scrollPaddingTop = ''
     }
   }
 })()

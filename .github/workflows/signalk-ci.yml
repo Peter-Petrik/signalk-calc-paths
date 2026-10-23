@@ -11,6 +11,14 @@
 # (integration/server-check.js), which configures entries and checks
 # what the server publishes.
 #
+# The integration test runs against two server versions: the latest,
+# and 2.34.0, the release the plugin is developed and run on, so that
+# a change that breaks that version shows up even after newer server
+# releases have come out.
+#
+# The shared workflow also runs `npm run lint` when package.json has
+# a lint script; that step does not fail the run.
+#
 # It can also be triggered manually from the GitHub Actions UI
 # with custom settings (Node versions, server versions).
 #
@@ -62,7 +70,7 @@ on:
       signalk-server-versions:
         description: 'JSON array of signalk-server versions for integration testing, e.g. ["2.23.0","latest"]'
         required: false
-        default: '["latest"]'
+        default: '["2.34.0", "latest"]'
         type: string
 
 jobs:
@@ -75,7 +83,7 @@ jobs:
       build-command: npm run build --if-present
       node-versions: '["22", "24"]'
       enable-signalk-integration: true
-      signalk-server-versions: '["latest"]'
+      signalk-server-versions: '["2.34.0", "latest"]'
 
   # ── Manual runs (workflow_dispatch with custom inputs) ────
   test-plugin-manual:

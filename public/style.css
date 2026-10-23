@@ -107,7 +107,14 @@ a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* A rule of its own: Safari before 15.4 drops a whole rule that names
+   :focus-visible, which would take this one with it. */
 label.file-button:focus-within {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
@@ -286,9 +293,14 @@ button.is-quiet {
   color: var(--ink-soft);
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
+}
+
+button[aria-disabled="true"]:hover {
+  background: transparent;
 }
 
 .action-result {
@@ -299,6 +311,12 @@ button:disabled {
 
 .action-result.is-error {
   color: var(--port);
+}
+
+/* The outcome of a reset stays in place, empty, between resets; it takes
+   no room then, the gap beside it included. */
+.action-result:empty {
+  margin-right: -0.5rem;
 }
 
 .placeholder {

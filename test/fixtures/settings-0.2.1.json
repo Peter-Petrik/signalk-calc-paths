@@ -13,19 +13,19 @@
     "formulas": [
       {
         "enabled": true,
-        "name": "Hardtop solar power (trial)",
+        "name": "Hardtop solar power",
         "inputs": [
           {
             "name": "current",
-            "path": "electrical.solar.sp-hardtop.current"
+            "path": "electrical.solar.hardtop.current"
           },
           {
             "name": "voltage",
-            "path": "electrical.solar.sp-hardtop.voltage"
+            "path": "electrical.solar.hardtop.voltage"
           }
         ],
         "expression": "current * voltage",
-        "output": "electrical.solar.sp-hardtop.panelPowerTrial",
+        "output": "electrical.solar.hardtop.panelPower",
         "unit": "W",
         "staleTimeout": 60,
         "onStale": "stop"
@@ -36,7 +36,7 @@
         "inputs": [
           {
             "name": "hardtop",
-            "path": "electrical.solar.sp-hardtop.yieldToday"
+            "path": "electrical.solar.hardtop.yieldToday"
           },
           {
             "name": "port",
@@ -134,8 +134,8 @@
       {
         "enabled": true,
         "name": "Hardtop solar yield today",
-        "input": "electrical.solar.sp-hardtop.yieldTotal",
-        "output": "electrical.solar.sp-hardtop.yieldToday",
+        "input": "electrical.solar.hardtop.yieldTotal",
+        "output": "electrical.solar.hardtop.yieldToday",
         "unit": "J",
         "resets": "path",
         "resetPath": "electrical.solar.center.yieldToday",

@@ -76,7 +76,8 @@ test('a formula that loses an input stops the integration that reads it', () => 
       h.input(s, 'a.v', 10)
       // The current sensor reports "no reading" from 20 s to 50 s.
       h.input(s, 'a.i', s >= 20 && s < 50 ? null : 10)
-      for (let t = s; t < s + 10 && s < 60; t++) h.tick(t)
+      const end = s < 60 ? s + 10 : s
+      for (let t = s; t < end; t++) h.tick(t)
       if (s === 30) assert.equal(h.state('a.p', 39).state, 'waiting')
     }
     h.tick(60)

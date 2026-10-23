@@ -122,7 +122,7 @@ test('paths are checked', () => {
   assert.match(errorsOf({ counters: [{ output: 'a.today' }] })[0], /no input path/)
   assert.match(errorsOf({ counters: [{ input: 'a..total', output: 'a.today' }] })[0], /not a valid input path/)
   assert.match(errorsOf({ integrations: [{ input: 'a.rate', output: 'a.sum', resets: 'path' }] })[0], /no path to follow/)
-  assert.equal(errorsOf({ counters: [{ input: 'electrical.solar.sp-hardtop.yieldTotal', output: 'electrical.solar.sp-hardtop.yieldToday' }] })[0], null)
+  assert.equal(errorsOf({ counters: [{ input: 'electrical.solar.hardtop.yieldTotal', output: 'electrical.solar.hardtop.yieldToday' }] })[0], null)
 })
 
 test('formula inputs and expressions are checked', () => {

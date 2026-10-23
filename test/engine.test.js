@@ -874,8 +874,16 @@ test('a clock that stays behind the saved time is accepted after an hour', () =>
   assert.equal(engine.clockSuspect, true)
   engine.tick(NOON + 3500000, 3500000)
   assert.equal(engine.clockSuspect, true)
+  // Exactly an hour is not yet more than an hour.
+  engine.tick(NOON + 3600000, 3600000)
+  assert.equal(engine.clockSuspect, true)
   engine.tick(NOON + 3700000, 3700000)
   assert.equal(engine.clockSuspect, false)
+  // The accepted reading becomes the time compared against, so the clock
+  // stays trusted on the next pass, and a save records it.
+  engine.tick(NOON + 3750000, 3750000)
+  assert.equal(engine.clockSuspect, false)
+  assert.equal(engine.savedAt, NOON + 3700000)
   // The total was kept, and the next real midnight resets as usual.
   engine.input('m.total', 11, NOON + 3800000, 3800000)
   assert.equal(engine.tick(NOON + 3800000, 3800000)[0].value, 10)

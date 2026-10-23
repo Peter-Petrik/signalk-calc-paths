@@ -47,9 +47,23 @@
   // One record per group on screen, keyed by group id; '' is the unnamed
   // block of entries outside any group.
   const blocks = new Map()
+  let blockCount = 0
   let timeZone
   let timer = null
   let active = false
+  // Each run of polls has its own number, so that a run left over from
+  // before the view was hidden and shown again stops.
+  let run = 0
+  // The request in flight, if any, and whether another was asked for
+  // meanwhile: never more than one is on its way.
+  let pending = null
+  let again = false
+  // Answers are numbered, so that one older than the answer drawn is not.
+  let asked = 0
+  let shownAnswer = 0
+  // The text of the notices on screen, so that they are rebuilt, and read
+  // out, only when it changes.
+  let noticesKey = ''
 
   const STATE_LABELS = {
     ok: 'Publishing',
@@ -241,9 +255,14 @@
     detail.append(state, message)
 
     const action = element('div', 'entry-action')
+    // The outcome of a reset, read out when it appears. It stays in place
+    // while the buttons beside it are rebuilt.
+    const outcome = element('span', 'action-result')
+    outcome.setAttribute('role', 'status')
+    action.append(outcome)
     item.append(what, reading, detail, action)
 
-    const row = { item, name, path, reading, state, message, action, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
+    const row = { item, name, path, reading, state, message, action, outcome, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
     rows.set(entry.key, row)
     return row
   }
@@ -273,7 +292,12 @@
     if (drawn === row.drawn) return
     row.drawn = drawn
 
-    row.action.replaceChildren()
+    for (const child of [...row.action.children]) {
+      if (child !== row.outcome) child.remove()
+    }
+    const result = row.stage === 'confirm' || !row.result ? null : row.result
+    row.outcome.textContent = result ? result.text : ''
+    row.outcome.classList.toggle('is-error', Boolean(result && result.failed))
     if (!entry.canReset) return
 
     if (row.stage === 'confirm') {
@@ -295,13 +319,16 @@
       return
     }
 
-    if (row.result) row.action.append(element('span', `action-result${row.result.failed ? ' is-error' : ''}`, row.result.text))
     const cycles = entry.type === 'cycles'
     const button = element('button', '', cycles ? 'Forget cycles' : 'Reset to zero')
     button.type = 'button'
-    button.disabled = row.stage === 'busy'
+    // While the reset is on its way the button is marked unavailable but
+    // stays able to hold keyboard focus, which a disabled button drops.
+    if (row.stage === 'busy') button.setAttribute('aria-disabled', 'true')
     button.setAttribute('aria-label', cycles ? `Forget the cycles counted for ${label}` : `Reset ${label} to zero`)
-    button.addEventListener('click', () => setStage(row, entry, 'confirm'))
+    button.addEventListener('click', () => {
+      if (row.stage !== 'busy') setStage(row, entry, 'confirm')
+    })
     row.action.append(button)
   }
 
@@ -319,7 +346,7 @@
     }
     renderAction(row, entry)
     const next = row.action.querySelector('button')
-    if (next && hadFocus && stage !== 'busy') next.focus()
+    if (next && hadFocus) next.focus()
   }
 
   /** Shows the outcome of a reset beside the button for a few seconds. */
@@ -399,7 +426,9 @@
         heading.append(toggle)
         section.append(heading)
         Object.assign(block, { heading, toggle, label, count })
-        list.id = `group-${id}`
+        // Numbered rather than named after the group id, so the id is
+        // always one word, as an aria-controls list needs.
+        list.id = `status-group-${++blockCount}`
         toggle.setAttribute('aria-controls', list.id)
       } else {
         list.setAttribute('aria-label', 'Calculated paths')
@@ -503,11 +532,16 @@
       const times = ignored.count === 1 ? 'One input value was' : `${ignored.count} input values were`
       messages.push(writeWithPaths(notice('warning', ''), `${times} ignored since the plugin started, being older than a value already read for the same path from another source. The last was on ${ignored.last.path} from ${ignored.last.source || 'an unnamed source'}, stamped ${when(ignored.last.timestamp)} and received ${when(ignored.last.at)}.`, [ignored.last.path]))
     }
-    for (const problem of data.problems) messages.push(notice('error', problem))
-    notices.replaceChildren(...messages)
+    for (const problem of data.problems || []) messages.push(notice('error', problem))
+    const key = messages.map((box) => `${box.className}|${box.textContent}`).join('\n')
+    if (key !== noticesKey) {
+      noticesKey = key
+      notices.replaceChildren(...messages)
+    }
 
     // Entries and groups that are no longer configured leave the page.
-    const current = new Set(data.entries.map((entry) => entry.key))
+    const list = Array.isArray(data.entries) ? data.entries : []
+    const current = new Set(list.map((entry) => entry.key))
     for (const [key, row] of rows) {
       if (!current.has(key)) {
         clearTimeout(row.confirmTimer)
@@ -519,7 +553,7 @@
     const groups = Array.isArray(data.groups) ? data.groups : []
     const known = new Set(groups.map((group) => group.id))
     const byGroup = new Map([['', []], ...groups.map((group) => [group.id, []])])
-    for (const entry of data.entries) byGroup.get(entry.group && known.has(entry.group) ? entry.group : '').push(entry)
+    for (const entry of list) byGroup.get(entry.group && known.has(entry.group) ? entry.group : '').push(entry)
 
     // Blocks in the editor's order: the entries outside any group, then
     // each group that holds an entry. A line already in its place is left
@@ -544,7 +578,7 @@
     })
     updateAllToggle()
 
-    if (data.entries.length === 0) {
+    if (list.length === 0) {
       showPlaceholder('No entries yet. Add a formula, a period counter, an integration or a cycles entry in the editor.', { text: 'Open the editor', href: '#edit' })
     } else {
       placeholder.hidden = true
@@ -553,21 +587,49 @@
     refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(new Date())}${started}`
   }
 
-  async function refresh () {
+  /**
+   * Reads the status and draws it. A call while a request is on its way
+   * asks for one more after it, so requests never pile up.
+   */
+  function refresh () {
+    if (pending) {
+      again = true
+      return pending
+    }
+    pending = (async () => {
+      try {
+        do {
+          again = false
+          await fetchAndDraw()
+        } while (again)
+      } finally {
+        pending = null
+      }
+    })()
+    return pending
+  }
+
+  async function fetchAndDraw () {
+    const number = ++asked
     let result
     try {
       result = await api('/entries')
     } catch (err) {
+      if (number < shownAnswer) return
+      shownAnswer = number
       refreshed.textContent = 'The server could not be reached. Trying again.'
       return
     }
+    if (number < shownAnswer) return
+    shownAnswer = number
 
-    if (result.ok) {
+    if (result.ok && result.body) {
       render(result.body)
       return
     }
 
     clearEntries()
+    noticesKey = ''
     notices.replaceChildren()
     if (result.status === 401 || result.status === 403) {
       showPlaceholder('Log in to Signal K to see the calculated paths.', { text: 'Log in', href: '/admin/#/login' })
@@ -580,14 +642,29 @@
     }
   }
 
+  /** Polls while the view shows: the next request waits for the answer to the last. */
+  function poll (current) {
+    if (!active || current !== run) return
+    const next = () => {
+      if (active && current === run) timer = setTimeout(() => poll(current), POLL_MS)
+    }
+    // A failed drawing does not stop the polls.
+    refresh().then(next, (err) => {
+      next()
+      throw err
+    })
+  }
+
   window.CalcPaths.status = {
     show () {
       active = true
-      refresh()
-      if (!timer) timer = setInterval(() => { if (active) refresh() }, POLL_MS)
+      clearTimeout(timer)
+      poll(++run)
     },
     hide () {
       active = false
+      clearTimeout(timer)
+      run++
     },
     refresh
   }

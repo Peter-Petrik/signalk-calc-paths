@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Unit of a Record's Input**: The status route reports `inputUnit` for a record, the unit in which its levels are set, so the status page shows a level of 1 on a ratio as 100 %.
 
 ### Changed
+- **Status Page Details**: Under each entry the state now stands alone, with a message only when there is one, such as why the entry is waiting, and the details follow as a list of labelled facts, one a line: what the entry reads, when it resets or starts again, when it was last reset, the figures of a cycles entry, what was filled in from history. The label sits beside its value on a wide screen and above it on a narrow one. Until now all of it ran on as one paragraph after the state, in which a fact was hard to find. Paths wrap only after a dot, so a segment with a hyphen, such as `port-aft`, no longer breaks at its hyphen, and no name breaks in the middle.
 - **Years in Dates**: The status page adds the year to a date more than 300 days away, as a record or the history may hold one.
 - **Kelvin on the Status Page**: A record in kelvin is shown in °C, as a formula is: it holds a temperature, not a sum or a difference.
 - **Documentation**: The README describes records and filling in from history in the order the editor shows their fields, with a worked example for a battery, and lists their limits. "Averages and Extremes" under Future Enhancements is now "Averages", as a record covers the lowest and highest value over a period. `docs/upgrading.md` describes going back to 0.7.0.

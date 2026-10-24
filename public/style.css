@@ -191,7 +191,12 @@ label.file-button:focus-within {
   font-family: var(--mono);
   font-size: 0.82rem;
   color: var(--ink-soft);
+  /* An output that is not a valid path is plain text, and must still wrap. */
   overflow-wrap: anywhere;
+}
+
+.entry-path code.path {
+  font-size: inherit;
 }
 
 .entry-reading {
@@ -230,10 +235,38 @@ label.file-button:focus-within {
 
 .entry-detail {
   grid-area: detail;
-  margin: 0;
+  min-width: 0;
   font-size: 0.92rem;
   color: var(--ink-soft);
-  max-width: 68ch;
+  max-width: 72ch;
+}
+
+.entry-status {
+  margin: 0;
+}
+
+/* The facts of an entry, one a line: the label beside its value, or above
+   it on a narrow screen. */
+.entry-facts {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr);
+  column-gap: 1rem;
+  row-gap: 0.2rem;
+  margin: 0.45rem 0 0;
+}
+
+.entry-facts:empty {
+  display: none;
+}
+
+.entry-facts dt {
+  color: var(--ink-soft);
+}
+
+.entry-facts dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--ink);
 }
 
 .entry-state {
@@ -366,6 +399,20 @@ code.path,
 .card-output {
   font-family: var(--mono);
   font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+/* A path breaks only after a dot, never inside a segment such as port-aft;
+   see pathCode() in common.js. A segment longer than the whole line, as in
+   a narrow column, still breaks inside rather than run out of it: as an
+   inline block it is no wider than its text, and no wider than the line. */
+code.path {
+  overflow-wrap: normal;
+}
+
+.path-part {
+  display: inline-block;
+  max-width: 100%;
   overflow-wrap: anywhere;
 }
 
@@ -1070,6 +1117,15 @@ input[type="checkbox"] {
 
   .entry-reading {
     text-align: left;
+  }
+
+  .entry-facts {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .entry-facts dd + dt {
+    margin-top: 0.35rem;
   }
 
   .entry-action {

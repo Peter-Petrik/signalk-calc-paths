@@ -150,11 +150,29 @@
   }
 
   /**
+   * A path in a code font that wraps only after a dot: each segment is kept
+   * whole, so a segment such as port-aft is never broken at its hyphen,
+   * and copying the text still gives the path as it is.
+   */
+  function pathCode (path) {
+    const code = element('code', 'path')
+    const segments = path.split('.')
+    segments.forEach((segment, index) => {
+      const last = index === segments.length - 1
+      code.append(element('span', 'path-part', last ? segment : `${segment}.`))
+      if (!last) code.append(document.createElement('wbr'))
+    })
+    return code
+  }
+
+  /**
    * Writes a sentence into a node with every path it names set apart in
    * a code font. Only the paths given are marked, so a figure such as 13.75
    * is never mistaken for one.
    */
-  function writeWithPaths (node, text, paths) {
+  function writeWithPaths (node, value, paths) {
+    // A missing value is written as nothing rather than stop the page.
+    const text = String(value ?? '')
     node.replaceChildren()
     const known = [...new Set(paths)].filter((path) => typeof path === 'string' && path.includes('.'))
     if (known.length === 0) {
@@ -175,7 +193,7 @@
         continue
       }
       if (match.index > last) node.append(text.slice(last, match.index))
-      node.append(element('code', 'path', match[0]))
+      node.append(pathCode(match[0]))
       last = match.index + match[0].length
     }
     if (last < text.length) node.append(text.slice(last))
@@ -230,6 +248,7 @@
     everyday,
     shownUnit,
     figure,
+    pathCode,
     readNumber,
     remembered,
     writeWithPaths

@@ -79,21 +79,13 @@
     disabled: 'Switched off'
   }
 
+  // When a total resets, or a record starts again, for the value of a fact.
   const RESET_PHRASES = {
-    day: 'resets every day',
-    week: 'resets every week',
-    month: 'resets every month',
-    year: 'resets every year',
-    manual: 'reset only by hand'
-  }
-
-  // When a record of a lowest or highest value starts again.
-  const RESTART_PHRASES = {
-    day: 'starts again every day',
-    week: 'starts again every week',
-    month: 'starts again every month',
-    year: 'starts again every year',
-    manual: 'starts again only by hand'
+    day: 'every day',
+    week: 'every week',
+    month: 'every month',
+    year: 'every year',
+    manual: 'only by hand'
   }
 
   /**
@@ -166,49 +158,47 @@
   }
 
   /**
-   * Says why a total was last cleared. Without this a total that starts
-   * again at an unexpected time gives no hint of the reason.
+   * One line of the list under an entry: a label and its value. The value
+   * may name paths, which are set apart in a code font.
    */
-  function describeReset (record, entry) {
-    if (!record || !record.at) return ''
-    const at = when(record.at)
-    if (entry && entry.type === 'record') return describeRestart(record, entry, at)
+  const fact = (label, value) => ({ label, value })
+
+  /**
+   * Why and when a total was last cleared, the cycles last forgotten or a
+   * record last started again. Without this a figure that starts again at
+   * an unexpected time gives no hint of the reason. Null when it never was.
+   */
+  function resetFact (record, entry) {
+    if (!record || !record.at) return null
+    const isRecord = entry.type === 'record'
     // The total a period ended with, when the plugin kept it, in the
     // reading the page shows for the entry's value.
-    const closed = Number.isFinite(record.total) ? `; the ${record.period || 'period'} closed at ${withUnit(record.total, entry)}` : ''
+    const closed = !isRecord && Number.isFinite(record.total) ? `; the ${record.period || 'period'} closed at ${withUnit(record.total, entry)}` : ''
+    let why
     switch (record.cause) {
       case 'period':
-        return ` Last reset ${at}: a new ${record.period || 'period'} began${closed}.`
+        why = `a new ${record.period || 'period'} began${closed}`
+        break
       case 'zone':
-        return ` Last reset ${at}: the time zone changed${record.zone ? ` to ${zoneLabel(record.zone)}` : ''} and a new period had already begun there${closed}.`
+        why = `the time zone changed${record.zone ? ` to ${zoneLabel(record.zone)}` : ''} and a new period had already begun there${closed}`
+        break
       case 'path': {
         const fall = Number.isFinite(record.from) && Number.isFinite(record.to) ? ` fell from ${figure(record.from)} to ${figure(record.to)}` : ' fell'
         const source = record.source ? `, a value from ${record.source}` : ''
-        return ` Last reset ${at}: ${record.path || 'the followed path'}${fall}${source}.`
+        why = `${record.path || 'the followed path'}${fall}${source}`
+        break
       }
-      case 'request':
-        return ` Last reset ${at}: by request, from this page or the reset route.`
-      default:
-        return ''
-    }
-  }
-
-  /** Says why a record last started again. */
-  function describeRestart (record, entry, at) {
-    switch (record.cause) {
-      case 'period':
-        return ` Last started again ${at}: a new ${record.period || 'period'} began.`
       case 'level':
-        return ` Last started again ${at}: ${entry.inputs[0]} came to ${inInputUnit(record.level, entry)}.`
-      case 'path': {
-        const fall = Number.isFinite(record.from) && Number.isFinite(record.to) ? ` fell from ${figure(record.from)} to ${figure(record.to)}` : ' fell'
-        return ` Last started again ${at}: ${record.path || 'the followed path'}${fall}.`
-      }
+        why = `${entry.inputs[0]} came to ${inInputUnit(record.level, entry)}`
+        break
       case 'request':
-        return ` Last started again ${at}: by request, from this page or the reset route.`
+        why = 'by request, from this page or the reset route'
+        break
       default:
-        return ''
+        return null
     }
+    const label = isRecord ? 'Last started again' : entry.type === 'cycles' ? 'Cycles forgotten' : 'Last reset'
+    return fact(label, `${when(record.at)}: ${why}`)
   }
 
   /** A level of a record in its input's unit, shown as the editor shows it: 100 % for a ratio of 1. */
@@ -239,130 +229,144 @@
     return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
   }
 
-  /** How a Cycles entry reads its inputs, what it found, and where it is now. */
-  function describeCycles (entry) {
+  /** How a cycles entry reads its inputs, what it found, and where it is now. */
+  function cyclesFacts (entry) {
     const inputs = (entry.cycleInputs || []).map((input) => input.kind === 'wave'
-      ? `${input.path} read as a wave, ON while ${input.direction || 'falling'}`
-      : `${input.path} ON above ${figure(input.threshold || 0)}`)
-    const how = inputs.length > 1
-      ? `Cycles while ${entry.combine === 'any' ? 'any input is ON (or)' : 'all inputs are ON (and)'}: ${inputs.join('; ')}.`
-      : `Cycles of ${inputs[0] || 'no input'}.`
+      ? `${input.path}, a wave, ON while ${input.direction || 'falling'}`
+      : `${input.path}, ON above ${figure(input.threshold || 0)}`)
+    const facts = [fact('Cycles of', inputs.join('; ') || 'no input')]
+    if (inputs.length > 1) facts.push(fact('Combined', entry.combine === 'any' ? 'ON while any input is ON (or)' : 'ON while all inputs are ON (and)'))
     const c = entry.cycles || {}
-    const window = `${figure(entry.window)} h`
-    let found
+    const window = `Last ${figure(entry.window)} h`
     if (!c.count) {
-      found = ` No complete cycle in the last ${window} yet.`
+      facts.push(fact(window, 'no complete cycle yet'))
     } else {
       const duty = Number.isFinite(c.duty) ? `, ON ${figure(c.duty * 100)} % of the time` : ''
-      found = ` ${c.count} ${c.count === 1 ? 'cycle' : 'cycles'} in the last ${window}. Medians: ON ${duration(c.onMedian)}, OFF ${duration(c.offMedian)}, ON and OFF together ${duration(c.periodMedian)}${duty}. The latest ON stretch counted lasted ${duration(c.lastOn)}.`
+      facts.push(fact(window, `${c.count} ${c.count === 1 ? 'cycle' : 'cycles'}${duty}`))
+      facts.push(fact('Medians', `ON ${duration(c.onMedian)}, OFF ${duration(c.offMedian)}, ON and OFF together ${duration(c.periodMedian)}`))
+      facts.push(fact('Latest ON counted', duration(c.lastOn)))
     }
     // Turning points of a wave are found a little after they happen, so
     // this is the latest stretch found, not necessarily the present state.
-    let now = ''
     if (c.state === 'on' || c.state === 'off') {
-      now = Number.isFinite(c.stateFor)
-        ? ` The latest stretch found is ${c.state.toUpperCase()}, begun ${duration(c.stateFor)} ago.`
-        : ` The latest stretch found is ${c.state.toUpperCase()}; its start was not seen.`
+      facts.push(fact('Latest stretch found', Number.isFinite(c.stateFor)
+        ? `${c.state.toUpperCase()}, begun ${duration(c.stateFor)} ago`
+        : `${c.state.toUpperCase()}, its start not seen`))
     }
     // The ON time so far is the one figure not taken from the cycles
-    // already complete, so the sentence says what it publishes.
-    let figureNow = ''
+    // already complete, so the list says that it is what is published.
     if (entry.statistic === 'onSoFar') {
       const soFar = Number.isFinite(c.onSoFar) ? c.onSoFar : entry.value
-      figureNow = Number.isFinite(soFar)
-        ? ` Publishes the ON time so far: ${duration(soFar)}.`
-        : ' Publishes the ON time so far.'
+      facts.push(fact('Publishes', Number.isFinite(soFar) ? `the ON time so far, ${duration(soFar)}` : 'the ON time so far'))
     }
-    return `${how}${found}${now}${figureNow}${describeReset(entry.lastReset, entry)}`
+    return facts
   }
 
   /**
    * The inputs a formula counts as their value when stale at the moment,
    * each with the value and the reason, so that a silent device shows.
    */
-  function describeSubstituted (entry) {
+  function substitutedFact (entry) {
     const substituted = entry.substituted || []
-    if (substituted.length === 0) return ''
+    if (substituted.length === 0) return null
     const reasons = {
       stale: `no value for more than ${duration(entry.staleTimeout)}`,
       none: `no value since ${entry.edited ? 'the entry was last changed' : 'the plugin started'}`,
       invalid: 'no number at the moment'
     }
     const items = substituted.map((input) => `${input.path} as ${input.value} (${reasons[input.reason] || input.reason})`)
-    return `. Counted as their value when stale: ${items.join(', ')}.`
+    return fact('Counted as their value when stale', items.join('; '))
   }
 
   /** What a record keeps, what it holds now, and since when. */
-  function describeRecord (entry) {
+  function recordFacts (entry) {
     const input = entry.inputs[0]
-    const time = entry.timeOutput ? ` The moment is published on ${entry.timeOutput}.` : ''
+    const time = entry.timeOutput ? fact('Moment published on', entry.timeOutput) : null
     if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') {
-      const level = `${entry.keep === 'sinceAbove' ? 'at or above' : 'at or below'} ${inInputUnit(entry.level, entry)}`
-      let now = ''
-      if (entry.atLevel) now = ' It is at the level now.'
-      else if (entry.lastMet) now = ` Last there ${when(entry.lastMet)}.`
-      return `Time since ${input} was last ${level}.${now}${time}`
+      let last = 'not yet'
+      if (entry.atLevel) last = 'now'
+      else if (entry.lastMet) last = when(entry.lastMet)
+      return [
+        fact('Time since', input),
+        fact('Level', `${entry.keep === 'sinceAbove' ? 'at or above' : 'at or below'} ${inInputUnit(entry.level, entry)}`),
+        fact('Last at the level', last),
+        time
+      ]
     }
-    const kind = entry.keep === 'highest' ? 'Highest' : 'Lowest'
     let restart
-    if (entry.resets === 'level') restart = `starts again whenever it is ${entry.keep === 'highest' ? 'at or below' : 'at or above'} ${inInputUnit(entry.resetLevel, entry)}`
-    else if (entry.resets === 'path') restart = `starts again when ${entry.resetPath} resets`
-    else restart = RESTART_PHRASES[entry.resets] || RESTART_PHRASES.manual
-    const held = entry.record ? ` Reached ${when(entry.record.at)}.` : ' No value seen yet.'
-    const covers = entry.windowStart ? ` Covers the time since ${when(entry.windowStart)}.` : ''
-    return `${kind} value of ${input}, ${restart}.${held}${covers}${time}${describeReset(entry.lastReset, entry)}`
+    if (entry.resets === 'level') restart = `whenever it is ${entry.keep === 'highest' ? 'at or below' : 'at or above'} ${inInputUnit(entry.resetLevel, entry)}`
+    else if (entry.resets === 'path') restart = `when ${entry.resetPath} resets`
+    else restart = RESET_PHRASES[entry.resets] || RESET_PHRASES.manual
+    return [
+      fact(entry.keep === 'highest' ? 'Highest of' : 'Lowest of', input),
+      fact('Starts again', restart),
+      fact('Reached', entry.record ? when(entry.record.at) : 'no value seen yet'),
+      entry.windowStart ? fact('Covers', `since ${when(entry.windowStart)}`) : null,
+      time,
+      resetFact(entry.lastReset, entry)
+    ]
   }
 
   /**
    * What the look-back of an entry found, or why it found nothing, so that
    * a figure that includes the time before the entry started says so.
    */
-  function describeHistory (entry) {
+  function historyFact (entry) {
+    const label = 'From history'
     const h = entry.history
     if (!h) {
-      if (entry.lookback === 'running') return ' Reading the history.'
-      if (entry.lookback === 'wanted') return ' The history is to be read.'
-      return ''
+      if (entry.lookback === 'running') return fact(label, 'being read')
+      if (entry.lookback === 'wanted') return fact(label, 'to be read')
+      return null
     }
     switch (h.outcome) {
       case 'waiting':
-        return ` The history is not read yet: ${h.reason}. Trying again.`
+        return fact(label, `not read yet: ${h.reason}; trying again`)
       case 'failed':
       case 'skipped':
-        return ` Not filled in from the history: ${h.reason}.`
+        return fact(label, `not filled in: ${h.reason}`)
       case 'empty':
-        return h.reason ? ` Not filled in from the history: ${h.reason}.` : ` The history held nothing for it before ${when(h.to)}.`
+        return fact(label, h.reason ? `not filled in: ${h.reason}` : `nothing held up to ${when(h.to)}`)
       case 'filled': {
-        const span = h.from ? `from ${when(h.from)} to ${when(h.to)}` : `before ${when(h.to)}`
-        const steps = Number.isFinite(h.resolution) && h.resolution > 1 ? `, read in steps of ${duration(h.resolution)}` : ''
-        if (entry.type === 'cycles') return ` Filled in from the history: ${h.stretches} ${h.stretches === 1 ? 'stretch' : 'stretches'} ${span}${steps}.`
+        const span = h.from ? `${when(h.from)} to ${when(h.to)}` : `up to ${when(h.to)}`
+        const steps = Number.isFinite(h.resolution) && h.resolution > 1 ? `, in steps of ${duration(h.resolution)}` : ''
+        if (entry.type === 'cycles') return fact(label, `${h.stretches} ${h.stretches === 1 ? 'stretch' : 'stretches'}, ${span}${steps}`)
         if (entry.type === 'record') {
-          if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') return ` Filled in from the history: last at the level ${when(h.found)}.`
-          return ` Filled in from the history ${span}: the ${entry.keep === 'highest' ? 'highest' : 'lowest'} there was reached ${when(h.found)}.`
+          if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') return fact(label, `last at the level ${when(h.found)}`)
+          return fact(label, `${span}; the ${entry.keep === 'highest' ? 'highest' : 'lowest'} there was reached ${when(h.found)}`)
         }
-        return ` Filled in from the history: ${withUnit(h.amount, entry)} ${span}${steps}.`
+        return fact(label, `${withUnit(h.amount, entry)}, ${span}${steps}`)
       }
       default:
-        return ''
+        return null
     }
   }
 
-  /** One sentence saying what kind of entry this is and how it behaves. */
-  function describe (entry) {
-    return describeKind(entry) + describeHistory(entry)
-  }
-
-  function describeKind (entry) {
-    if (entry.type === 'formula') return `Formula: ${entry.expression}${describeSubstituted(entry)}`
-    if (entry.type === 'cycles') return describeCycles(entry)
-    if (entry.type === 'record') return describeRecord(entry)
-    const kind = entry.type === 'counter' ? 'Period counter' : 'Integration'
-    const reset = entry.resets === 'path' ? `resets when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]
-    const since = entry.since ? ` Counting since ${when(entry.since)}.` : ''
-    const corrected = entry.sinceCorrected && entry.sinceCorrected.at
-      ? ` The start time was set on ${when(entry.sinceCorrected.at)} without clearing the total, because the earlier one${entry.sinceCorrected.previous ? ` (${when(entry.sinceCorrected.previous)})` : ''} could not be used.`
-      : ''
-    return `${kind} on ${entry.inputs.join(', ')}, ${reset}.${since}${describeReset(entry.lastReset, entry)}${corrected}`
+  /**
+   * The list under an entry: what kind of entry it is and how it behaves,
+   * one fact a line, so that each can be found at a glance.
+   */
+  function factsOf (entry) {
+    let facts
+    if (entry.type === 'formula') {
+      facts = [fact('Formula', entry.expression), substitutedFact(entry)]
+    } else if (entry.type === 'cycles') {
+      facts = [...cyclesFacts(entry), resetFact(entry.lastReset, entry)]
+    } else if (entry.type === 'record') {
+      facts = recordFacts(entry)
+    } else {
+      const corrected = entry.sinceCorrected && entry.sinceCorrected.at
+        ? fact('Start time', `set on ${when(entry.sinceCorrected.at)} without clearing the total, because the earlier one${entry.sinceCorrected.previous ? ` (${when(entry.sinceCorrected.previous)})` : ''} could not be used`)
+        : null
+      facts = [
+        fact(entry.type === 'counter' ? 'Period counter on' : 'Integration of', entry.inputs.join(', ')),
+        fact('Resets', entry.resets === 'path' ? `when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]),
+        entry.since ? fact('Counting since', when(entry.since)) : null,
+        resetFact(entry.lastReset, entry),
+        corrected
+      ]
+    }
+    return [...facts, historyFact(entry)].filter(Boolean)
   }
 
   function createRow (entry) {
@@ -373,10 +377,15 @@
     what.append(name, path)
 
     const reading = element('div', 'entry-reading')
-    const detail = element('p', 'entry-detail')
+    // The state and, when there is one, the message that goes with it; then
+    // the facts of the entry, one a line.
+    const detail = element('div', 'entry-detail')
+    const status = element('p', 'entry-status')
     const state = element('span', 'entry-state')
     const message = element('span')
-    detail.append(state, message)
+    status.append(state, message)
+    const facts = element('dl', 'entry-facts')
+    detail.append(status, facts)
 
     const action = element('div', 'entry-action')
     // The outcome of a reset, read out when it appears. It stays in place
@@ -386,7 +395,7 @@
     action.append(outcome)
     item.append(what, reading, detail, action)
 
-    const row = { item, name, path, reading, state, message, action, outcome, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
+    const row = { item, name, path, reading, state, message, facts, factsDrawn: null, action, outcome, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
     rows.set(entry.key, row)
     return row
   }
@@ -511,9 +520,26 @@
     refresh()
   }
 
-  /** The paths an entry's sentence may name, to be set in a code font. */
+  /** The paths an entry's message and facts may name, to be set in a code font. */
   function pathsOf (entry) {
     return [entry.output, entry.resetPath, entry.timeOutput, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path), ...(entry.substituted || []).map((input) => input.path)]
+  }
+
+  /**
+   * Draws the list of facts, only when it changed: it is rebuilt from the
+   * status every two seconds, and an unchanged list is left as it is so
+   * that a selection in it survives.
+   */
+  function renderFacts (row, facts, paths) {
+    const drawn = JSON.stringify(facts)
+    if (drawn === row.factsDrawn) return
+    row.factsDrawn = drawn
+    const nodes = []
+    for (const item of facts) {
+      nodes.push(element('dt', '', item.label))
+      nodes.push(writeWithPaths(element('dd'), item.value, paths))
+    }
+    row.facts.replaceChildren(...nodes)
   }
 
   function renderEntry (entry) {
@@ -522,12 +548,12 @@
     row.name.textContent = entry.name || entry.output || 'Unnamed entry'
     // Outside a group an entry sits straight under the page heading.
     row.name.setAttribute('aria-level', entry.group ? '3' : '2')
-    row.path.textContent = entry.output
+    writeWithPaths(row.path, entry.output || '', [entry.output])
     renderReading(row, entry)
     row.state.textContent = STATE_LABELS[entry.state] || entry.state
-    const parts = [describe(entry)]
-    if (entry.message) parts.unshift(entry.message)
-    writeWithPaths(row.message, `. ${parts.join(' ')}`, pathsOf(entry))
+    const paths = pathsOf(entry)
+    writeWithPaths(row.message, entry.message ? `. ${entry.message}` : '', paths)
+    renderFacts(row, factsOf(entry), paths)
     // The action area is left alone while a reset is being confirmed or
     // sent, so a refresh cannot pull the button out from under a click.
     if (row.stage === 'idle') renderAction(row, entry)

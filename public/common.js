@@ -69,6 +69,11 @@
         const sign = value < 0 ? '-' : ''
         const minutes = Math.round(size / 60)
         const hours = Math.floor(minutes / 60)
+        // A record's time since may run to weeks, read in days and hours.
+        if (type === 'record' && hours >= 24) {
+          const wholeHours = Math.round(size / 3600)
+          return { figure: `${sign}${Math.floor(wholeHours / 24)} d ${String(wholeHours % 24).padStart(2, '0')} h`, unit: '' }
+        }
         return hours > 0
           ? { figure: `${sign}${hours} h ${String(minutes % 60).padStart(2, '0')} min`, unit: '' }
           : { figure: `${sign}${minutes} min`, unit: '' }
@@ -82,9 +87,10 @@
       case 'ratio':
         return { figure: figure(value * 100), unit: '%' }
       case 'K':
-        // Only a formula can hold a temperature. A counter or integration
-        // in kelvin is a difference or a sum, where the offset is wrong.
-        return type === 'formula' ? { figure: figure(value - 273.15), unit: '°C' } : null
+        // Only a formula or a record can hold a temperature. A counter or
+        // integration in kelvin is a difference or a sum, where the offset
+        // is wrong.
+        return type === 'formula' || type === 'record' ? { figure: figure(value - 273.15), unit: '°C' } : null
       // The conversions below are plain factors with no offset, so they
       // hold for every type of entry: a sum or a difference of pascals is
       // that many hPa as well, unlike a sum of kelvin.

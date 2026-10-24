@@ -168,8 +168,9 @@ test('loops between entries are refused, and entries outside the loop still run'
 test('the form schema offers every field the configuration reader uses', () => {
   const fields = (type) => Object.keys(entryFields[type].properties).sort()
   assert.deepEqual(fields('formula'), ['enabled', 'expression', 'inputs', 'name', 'onStale', 'output', 'staleTimeout', 'unit'])
-  assert.deepEqual(fields('counter'), ['direction', 'enabled', 'input', 'minStep', 'name', 'onStale', 'output', 'resetPath', 'resets', 'reversal', 'staleTimeout', 'unit'])
-  assert.deepEqual(fields('integration'), ['enabled', 'gap', 'input', 'mode', 'name', 'onStale', 'output', 'resetPath', 'resets', 'staleTimeout', 'threshold', 'unit'])
+  assert.deepEqual(fields('counter'), ['direction', 'enabled', 'input', 'lookback', 'minStep', 'name', 'onStale', 'output', 'resetPath', 'resets', 'reversal', 'staleTimeout', 'unit'])
+  assert.deepEqual(fields('integration'), ['enabled', 'gap', 'input', 'lookback', 'mode', 'name', 'onStale', 'output', 'resetPath', 'resets', 'staleTimeout', 'threshold', 'unit'])
+  assert.deepEqual(fields('record'), ['enabled', 'input', 'keep', 'level', 'lookback', 'name', 'onStale', 'output', 'resetLevel', 'resetPath', 'resets', 'staleTimeout', 'startTime', 'startValue', 'timeOutput', 'unit'])
   // The settings form holds only what applies to every entry.
   assert.deepEqual(Object.keys(schema.properties).sort(), ['dayStart', 'repeatInterval', 'timeZone', 'timeZoneOffsetPath', 'timeZoneRegionPath', 'timeZoneSource', 'weekStart'])
   // Every top-level field has a place in the field order.
@@ -189,10 +190,10 @@ test('the form schema offers every field the configuration reader uses', () => {
 
   // The editor's field order lists every field once and only fields that
   // exist, and the entries file keeps every field the editor offers.
-  for (const type of ['formula', 'counter', 'integration', 'cycles']) {
+  for (const type of ['formula', 'counter', 'integration', 'cycles', 'record']) {
     const listed = entryOrder[type].filter((field) => field !== '*')
     assert.deepEqual([...listed].sort(), fields(type), type)
-    const sample = (f) => (f === 'enabled' ? true : f === 'inputs' ? [] : entryFields[type].properties[f].type === 'number' ? 1 : 'x')
+    const sample = (f) => (entryFields[type].properties[f].type === 'boolean' ? true : f === 'inputs' ? [] : entryFields[type].properties[f].type === 'number' ? 1 : 'x')
     const kept = Object.keys(checkDocument({ groups: [], entries: [{ id: 'e1', type, ...Object.fromEntries(fields(type).map((f) => [f, sample(f)])) }] }, true).doc.entries[0])
     assert.deepEqual(kept.filter((f) => !['id', 'group', 'type'].includes(f)).sort(), fields(type), type)
   }

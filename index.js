@@ -24,6 +24,7 @@ const { performance } = require('perf_hooks')
 
 const { normalizeConfig } = require('./lib/config')
 const { Engine, toNumber } = require('./lib/engine')
+const { lookBack } = require('./lib/history')
 const { checkName, compileFormula } = require('./lib/formula')
 const openApi = require('./lib/openapi')
 const { entryFields, entryOrder, schemaFor, uiSchema } = require('./lib/schema')
@@ -44,6 +45,11 @@ const SAVE_INTERVAL_MS = 30000
 // How often, in ticks, the followed time zone is looked at again without
 // anything new having been published. See ZoneTracker#recheck().
 const ZONE_RECHECK_TICKS = 60
+
+// How long one look-back may take before it is given up and tried again
+// later. A history provider whose database is still starting may not
+// answer at all. See runLookbacks().
+const LOOKBACK_TIMEOUT_MS = 120000
 
 /**
  * Arranges the publications of one calculation pass as the updates of one
@@ -89,6 +95,15 @@ function metadataOf (entry) {
     value.description = entry.name
   }
   return value
+}
+
+/**
+ * The metadata of the path a record publishes its time on: the entry's
+ * name, marked as the time that goes with it. A time has no unit.
+ */
+function timeMetadataOf (entry) {
+  if (!entry.name) return {}
+  return { displayName: `${entry.name} (time)`, description: `${entry.name}: the moment that goes with the value` }
 }
 
 /**
@@ -159,6 +174,12 @@ module.exports = function (app) {
   let exitListener = null
   let lastSaveMono = 0
   let ticksSinceZoneCheck = 0
+  // True while look-backs are being read; one run at a time. Each run has
+  // a number, so that one still under way when the plugin stops ends there.
+  let lookingBack = false
+  let lookbackRun = 0
+  // The time-out of the read under way, cleared by stop().
+  let lookbackTimer = null
   let lastStatus = null
   // When the plugin last started, for the status page: a start that nobody
   // asked for is otherwise indistinguishable from one that never happened.
@@ -227,6 +248,10 @@ module.exports = function (app) {
       if (!entry.enabled || entry.error) continue
       const value = metadataOf(entry)
       if (Object.keys(value).length > 0) wanted.set(entry.output, value)
+      if (entry.timeOutput) {
+        const time = timeMetadataOf(entry)
+        if (Object.keys(time).length > 0) wanted.set(entry.timeOutput, time)
+      }
     }
     const meta = []
     for (const [path, before] of announced) {
@@ -322,12 +347,90 @@ module.exports = function (app) {
         }
       }
       reportStatus()
+      runLookbacks()
       if ((engine.dirty || zones.dirty) && monoNow() - lastSaveMono >= SAVE_INTERVAL_MS) save()
     } catch (err) {
       app.error(`Calculation pass failed: ${err.stack || err.message}`)
       app.setPluginError(`Calculation pass failed: ${err.message}`)
       lastStatus = null
     }
+  }
+
+  /**
+   * Reads the history for the entries that started with nothing saved;
+   * see lib/history.js and Engine#lookbackPlans(). The reads run one after
+   * the other, in the background, so that the calculations never wait for
+   * them, and only one run is under way at a time.
+   *
+   * What a read found is handed to the engine running when it finishes:
+   * an edit made meanwhile carries unchanged entries over to a new engine,
+   * and the engine drops what belongs to an entry it no longer runs.
+   */
+  function runLookbacks () {
+    if (!engine || lookingBack) return
+    const plans = engine.lookbackPlans(wallNow(), monoNow())
+    if (plans.length === 0) return
+    lookingBack = true
+    const run = ++lookbackRun
+    const gone = () => !engine || run !== lookbackRun
+    const read = async () => {
+      for (const plan of plans) {
+        if (gone()) return
+        let api = null
+        let reason = 'no history provider answered: the History API needs a plugin that provides it, such as signalk-to-influxdb2'
+        if (typeof app.getHistoryApi !== 'function') {
+          engine.failLookback(plan, 'this Signal K server offers no History API to plugins (it came with version 2.33)', false, wallNow(), monoNow())
+          continue
+        }
+        try {
+          api = await app.getHistoryApi()
+        } catch (err) {
+          if (err && err.message) reason = `no history provider answered (${err.message})`
+        }
+        if (gone()) return
+        if (!api || typeof api.getValues !== 'function') {
+          engine.failLookback(plan, reason, true, wallNow(), monoNow())
+          app.debug(`Look-back for ${plan.entry.config.output}: ${reason}`)
+          continue
+        }
+        // A read that takes too long is given up: it makes no further
+        // request to the provider once the time is out or the plugin stops,
+        // so that retries do not pile up reads.
+        let timedOut = false
+        let timer = null
+        try {
+          const answer = await Promise.race([
+            lookBack(api, plan, () => timedOut || gone()),
+            new Promise((resolve, reject) => {
+              timer = setTimeout(() => {
+                timedOut = true
+                reject(new Error(`no answer within ${LOOKBACK_TIMEOUT_MS / 1000} s`))
+              }, LOOKBACK_TIMEOUT_MS)
+              lookbackTimer = timer
+            })
+          ])
+          if (gone()) return
+          engine.applyLookback(plan, answer, wallNow(), monoNow())
+          app.debug(`Look-back for ${plan.entry.config.output}: ${answer.reads} reads, ${plan.entry.history ? plan.entry.history.outcome : 'dropped'}`)
+        } catch (err) {
+          if (gone()) return
+          engine.failLookback(plan, `the history could not be read (${err.message})`, true, wallNow(), monoNow())
+          app.debug(`Look-back for ${plan.entry.config.output} failed: ${err.message}`)
+        } finally {
+          // Only this read's own time-out: a read left over from a stopped
+          // run must not clear the time-out of a run started since.
+          clearTimeout(timer)
+          if (lookbackTimer === timer) lookbackTimer = null
+        }
+      }
+    }
+    read()
+      .catch((err) => app.error(`Look-back failed: ${err.stack || err.message}`))
+      .finally(() => {
+        if (run !== lookbackRun) return
+        lookingBack = false
+        if (engine && engine.dirty) save()
+      })
   }
 
   /**
@@ -872,6 +975,11 @@ module.exports = function (app) {
   plugin.stop = function () {
     if (tickTimer) clearInterval(tickTimer)
     tickTimer = null
+    // A look-back under way ends at its next step; see runLookbacks().
+    lookbackRun++
+    lookingBack = false
+    clearTimeout(lookbackTimer)
+    lookbackTimer = null
     if (exitListener) process.removeListener('exit', exitListener)
     exitListener = null
     for (const unsubscribe of unsubscribes) {
@@ -1027,8 +1135,22 @@ module.exports = function (app) {
         problems: [stateProblem, ...normalized.problems].filter(Boolean),
         notes,
         groups: doc.groups,
-        entries: engine.snapshot(wallNow(), monoNow())
+        entries: engine.snapshot(wallNow(), monoNow()).map(withInputUnit)
       })
+    }
+
+    // A record's level is set in its input's unit, which the status page
+    // needs to show it; the server's metadata of the input holds it.
+    const withInputUnit = (item) => {
+      if (item.type !== 'record' || !item.inputs[0]) return item
+      let node
+      try {
+        node = app.getSelfPath(item.inputs[0])
+      } catch (err) {
+        node = undefined
+      }
+      const units = node && typeof node === 'object' && node.meta && typeof node.meta.units === 'string' ? node.meta.units : null
+      return { ...item, inputUnit: units }
     }
 
     // A browser lets a page of any site post a form, with the user's login
@@ -1047,7 +1169,7 @@ module.exports = function (app) {
       }
       const id = req.params.id
       if (!engine.reset(id, wallNow(), monoNow())) {
-        res.status(404).json({ error: `No running counter, integration or cycles entry publishes ${id}.` })
+        res.status(404).json({ error: `No running counter, integration, cycles entry or record of a lowest or highest value publishes ${id}.` })
         return
       }
       app.debug(`Total reset by request: ${id}`)

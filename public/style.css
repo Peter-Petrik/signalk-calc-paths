@@ -786,6 +786,7 @@ button.is-icon {
 }
 
 input[type="text"],
+input[type="datetime-local"],
 select,
 textarea {
   font: inherit;
@@ -797,6 +798,13 @@ textarea {
   padding: 0.4rem 0.55rem;
   width: 100%;
   max-width: 34rem;
+}
+
+/* A date and time needs no more room than it shows. Its calendar button
+   is drawn by the browser, which follows the colour scheme only when told. */
+input[type="datetime-local"] {
+  max-width: 16rem;
+  color-scheme: light dark;
 }
 
 input.is-path,

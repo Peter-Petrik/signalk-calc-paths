@@ -1,7 +1,7 @@
 {
   "name": "signalk-calc-paths",
-  "version": "0.7.0",
-  "description": "Signal K plugin to calculate new paths from existing ones: a formula over live values, a daily, weekly, monthly or yearly counter on a running total, a sum that integrates a rate over time, and the ON and OFF cycles of a device such as a fridge compressor.",
+  "version": "0.8.0",
+  "description": "Signal K plugin to calculate new paths from existing ones: a formula over live values, a daily, weekly, monthly or yearly counter on a running total, a sum that integrates a rate over time, the ON and OFF cycles of a device such as a fridge compressor, and the lowest or highest value of a path or the time since it was last at a level, filled in from history where a provider keeps it.",
   "main": "index.js",
   "scripts": {
     "test": "node --check index.js && node --test",
@@ -21,6 +21,9 @@
     "integrate",
     "cycles",
     "compressor",
+    "minimum",
+    "maximum",
+    "history",
     "derived"
   ],
   "author": {
@@ -45,6 +48,8 @@
       "./screenshots/webapp-editor-formula.png",
       "./screenshots/webapp-status-cycles.png",
       "./screenshots/webapp-editor-cycles.png",
+      "./screenshots/webapp-status-records.png",
+      "./screenshots/webapp-editor-record.png",
       "./screenshots/configuration-timezone.png"
     ]
   },

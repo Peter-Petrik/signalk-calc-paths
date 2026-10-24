@@ -2,6 +2,10 @@
 
 This page records what happens when an installation of an earlier version is updated, and how to go back. The current version needs no steps by hand: entries, groups and totals carry over.
 
+## From 0.8.0 Back to 0.7.0
+
+Version 0.7.0 does not know the record entry type and refuses an `entries.json` that holds one: no entry runs until a new set is saved. Before going back, export the entries as a backup, then delete every record in the editor and save. The other entries and their totals carry on under 0.7.0, which ignores the **Fill in from history** setting and what the look-backs found. Importing the export after returning to 0.8.0 brings the records back, from their saved state where 0.7.0 kept it and otherwise filled in from the history again.
+
 ## From 0.7.0 Back to 0.6.x
 
 Version 0.6.x does not know the **ON time so far** figure of a cycles entry and reads it, without a fault, as the median ON time, so an alert on such a path would get a different figure. Before going back, delete those entries or switch them to another figure, and save. The rest carries over: a counter's held value and the closing totals in the reset records are ignored by 0.6.x.

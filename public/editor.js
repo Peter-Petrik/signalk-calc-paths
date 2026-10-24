@@ -28,7 +28,8 @@
     formula: { label: 'Formula', explain: 'Calculates a value from live values: power from current and voltage, a sum of several sources, a unit conversion.' },
     counter: { label: 'Period counter', explain: 'Reports how much a running total has grown or fallen since the start of the day, week, month or year: today\'s yield from a lifetime counter, fuel used from a tank level.' },
     integration: { label: 'Integration', explain: 'Adds up a value over time: energy from power, volume from a flow, distance from speed, or the time something was on.' },
-    cycles: { label: 'Cycles', explain: 'Finds the ON and OFF stretches of a device that cycles, such as a fridge compressor or a pump, from a switch, a threshold or a rising and falling value, and reports how long they last.' }
+    cycles: { label: 'Cycles', explain: 'Finds the ON and OFF stretches of a device that cycles, such as a fridge compressor or a pump, from a switch, a threshold or a rising and falling value, and reports how long they last.' },
+    record: { label: 'Record', explain: 'Keeps the lowest or highest value of a path with the moment it was reached, or the time since a path was last at a level: the lowest charge since the battery was last full, the time since it was last full.' }
   }
 
   // Units offered while typing; any other text is accepted too.
@@ -41,7 +42,9 @@
   const SIGNALK_UNITS = new Set(['s', 'Hz', 'm3', 'm3/s', 'kg/s', 'kg/m3', 'deg', 'rad', 'rad/s', 'A', 'C', 'V', 'W', 'Nm', 'J', 'ohm', 'm', 'm/s', 'm2', 'K', 'Pa', 'kg', 'ratio', 'm/s2', 'rad/s2', 'N', 'T', 'Lux', 'Pa/s', 'Pa.s', 'B', 'b/s'])
 
   // Fields that hold a path, and so get suggestions and a live value.
-  const PATH_FIELDS = new Set(['input', 'output', 'resetPath'])
+  const PATH_FIELDS = new Set(['input', 'output', 'resetPath', 'timeOutput'])
+  // Fields that name a path this plugin publishes on.
+  const OUTPUT_FIELDS = new Set(['output', 'timeOutput'])
 
   const state = {
     // What the server holds: the last loaded or saved set.
@@ -143,7 +146,7 @@
     for (const [field, definition] of Object.entries(state.fields[type].properties)) {
       // A setting in the unit of the input path is left empty: its default
       // applies, and an empty field cannot be read as absolute zero.
-      if ('default' in definition && field !== 'inputs' && UNIT_FIELDS[type] !== field) values[field] = clone(definition.default)
+      if ('default' in definition && field !== 'inputs' && !unitField(type, field)) values[field] = clone(definition.default)
     }
     return values
   }
@@ -168,6 +171,14 @@
       if (field === 'window') return entry.statistic !== 'onSoFar'
       return true
     }
+    if (entry.type === 'record') {
+      const since = entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow'
+      if (field === 'level') return since
+      if (field === 'resets' || field === 'startValue') return !since
+      if (field === 'resetLevel') return !since && entry.resets === 'level'
+      if (field === 'resetPath') return !since && entry.resets === 'path'
+      return true
+    }
     if (field === 'resetPath') return entry.resets === 'path'
     if (field === 'threshold') return entry.mode === 'time'
     if (field === 'reversal') return entry.direction !== 'net'
@@ -181,7 +192,10 @@
   const CYCLE_UNITS = { onMedian: 's', offMedian: 's', periodMedian: 's', duty: 'ratio', lastOn: 's', onSoFar: 's', cycles: '' }
 
   // Settings given in the unit of the entry's input path.
-  const UNIT_FIELDS = { integration: 'threshold', counter: 'minStep' }
+  const UNIT_FIELDS = { integration: ['threshold'], counter: ['minStep'], record: ['level', 'resetLevel', 'startValue'] }
+  function unitField (type, field) {
+    return Boolean(UNIT_FIELDS[type] && UNIT_FIELDS[type].includes(field))
+  }
 
   /** The unit of a path: as the server announces it, or as an entry publishes it. */
   function unitsOf (path) {
@@ -191,6 +205,7 @@
     const producer = state.entries.find((entry) => entry.output === path)
     if (!producer) return null
     if (producer.unit) return producer.unit
+    if (producer.type === 'record' && (producer.keep === 'sinceAbove' || producer.keep === 'sinceBelow')) return 's'
     return producer.type === 'cycles' ? CYCLE_UNITS[producer.statistic || 'onMedian'] || null : null
   }
 
@@ -944,13 +959,19 @@
       const label = element('label', 'field-check')
       label.htmlFor = fieldId
       label.append(box, ` ${field === 'enabled' ? 'Switched on' : definition.title}`)
-      wrap.append(label)
+      if (field !== 'enabled' && definition.description) {
+        wrap.append(fieldHead(label, wrap), element('p', 'field-help', definition.description))
+      } else {
+        wrap.append(label)
+      }
       return wrap
     }
 
     const label = element('label', 'field-label', definition.title)
     label.htmlFor = fieldId
     wrap.append(definition.description ? fieldHead(label, wrap) : label)
+    // A node shown under the control, for a field that has one.
+    let after = null
     let control
     if (Array.isArray(definition.enum)) {
       control = element('select')
@@ -966,6 +987,34 @@
         for (const [name, row] of live.rows) row.hidden = !applies(entry, name)
         refreshChains()
       })
+    } else if (definition.format === 'date-time') {
+      // Typed in this browser's time zone and kept as a time in UTC, the
+      // form the plugin reads; see readMoment() in lib/config.js.
+      control = element('input')
+      control.type = 'datetime-local'
+      control.step = '1'
+      const hint = element('p', 'field-hint')
+      const pad = (n) => String(n).padStart(2, '0')
+      const local = (ms) => {
+        const d = new Date(ms)
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+      }
+      const describe = () => {
+        const text = entry[field]
+        const ms = typeof text === 'string' ? Date.parse(text) : NaN
+        hint.textContent = text === undefined || text === '' ? '' : Number.isFinite(ms) ? `Saved as ${new Date(ms).toISOString().replace('.000Z', 'Z')} (UTC).` : `Saved as "${text}", which is not a date and time with a time zone.`
+      }
+      const saved = typeof entry[field] === 'string' ? Date.parse(entry[field]) : NaN
+      control.value = Number.isFinite(saved) ? local(saved) : ''
+      control.addEventListener('input', () => {
+        const ms = control.value ? new Date(control.value).getTime() : NaN
+        if (!control.value) delete entry[field]
+        else if (Number.isFinite(ms)) entry[field] = new Date(ms).toISOString().replace('.000Z', 'Z')
+        describe()
+        markDirty()
+      })
+      describe()
+      after = hint
     } else if (field === 'expression') {
       control = element('textarea')
       control.rows = 2
@@ -976,7 +1025,7 @@
         markDirty()
         schedulePreview(entry, live)
       })
-    } else if (definition.type === 'number' && UNIT_FIELDS[entry.type] === field) {
+    } else if (definition.type === 'number' && unitField(entry.type, field)) {
       // In the unit of the input path, shown as the rules editor shows it.
       const number = unitNumber(entry, field, definition.default, () => entry.input, field === 'minStep', (unit) => {
         label.textContent = `${definition.title} (${unit || 'in the input\'s unit'})`
@@ -1012,7 +1061,7 @@
           live.title.textContent = entryLabel(entry)
           live.output.textContent = entry.output || 'no output path yet'
         }
-        if (PATH_FIELDS.has(field) || field === 'output') {
+        if (PATH_FIELDS.has(field)) {
           checkPath(control, field, entry[field])
           refreshChains()
         }
@@ -1023,6 +1072,7 @@
     }
     control.id = fieldId
     wrap.append(control)
+    if (after) wrap.append(after)
     if (field === 'unit') {
       const warning = element('p', 'field-warning')
       warning.id = `${fieldId}-warning`
@@ -1282,15 +1332,15 @@
   }
 
   function checkPath (control, field, value) {
-    const pattern = field === 'output' ? OUTPUT_PATTERN : PATH_PATTERN
+    const pattern = OUTPUT_FIELDS.has(field) ? OUTPUT_PATTERN : PATH_PATTERN
     control.setAttribute('aria-invalid', String(Boolean(value) && !pattern.test(value)))
   }
 
   function refreshHint (live, field, value) {
     const hint = live.hints.get(field)
     if (!hint) return
-    if (field === 'output') {
-      const others = state.entries.filter((entry) => entry.output === value)
+    if (OUTPUT_FIELDS.has(field)) {
+      const others = state.entries.filter((entry) => entry.output === value || entry.timeOutput === value)
       const known = state.paths.get(value)
       if (others.length > 1) hint.textContent = 'Another entry already writes this path.'
       else if (known && known.entry === undefined && known.value !== undefined) hint.textContent = 'Another source already publishes this path. Pick a path nothing else writes.'
@@ -1319,7 +1369,7 @@
   /** The paths an entry reads. */
   function readsOf (entry) {
     const paths = Array.isArray(entry.inputs) ? entry.inputs.map((input) => input.path) : [entry.input]
-    if ((entry.type === 'counter' || entry.type === 'integration') && entry.resets === 'path') paths.push(entry.resetPath)
+    if ((entry.type === 'counter' || entry.type === 'integration' || entry.type === 'record') && entry.resets === 'path') paths.push(entry.resetPath)
     return paths.filter(Boolean)
   }
 
@@ -1608,6 +1658,18 @@
       const steps = Math.max(1, Math.round(nonNegative(entry.smoothing, 150) / 30))
       return ['cycles', JSON.stringify(inputs), pick(entry.combine, ['all', 'any'], 'all'), steps, nonNegative(entry.shortest, 120), nonNegative(entry.staleTimeout, 180)].join('|')
     }
+    if (entry.type === 'record') {
+      // What decides what the record holds (signature() in lib/engine.js);
+      // the start entered by hand does not.
+      const keep = ['lowest', 'highest', 'sinceAbove', 'sinceBelow'].includes(entry.keep) ? entry.keep : 'lowest'
+      const since = keep === 'sinceAbove' || keep === 'sinceBelow'
+      const number = (value) => {
+        const n = value === null || value === '' || value === undefined ? NaN : Number(value)
+        return Number.isFinite(n) ? n : null
+      }
+      const resets = since ? 'manual' : (['day', 'week', 'month', 'year', 'level', 'path', 'manual'].includes(entry.resets) ? entry.resets : 'manual')
+      return ['record', entry.input || '', keep, since ? number(entry.level) : '', resets, resets === 'level' ? number(entry.resetLevel) : '', resets === 'path' ? entry.resetPath || '' : ''].join('|')
+    }
     return null
   }
 
@@ -1642,14 +1704,19 @@
       const entry = now.get(old.output)
       if (!entry) {
         const renamed = state.entries.find((e) => e.id === old.id)
-        const what = old.type === 'cycles' ? 'the cycles counted so far' : 'its total'
+        const what = { cycles: 'the cycles counted so far', record: 'its record' }[old.type] || 'its total'
         lost.push(renamed
           ? `"${entryLabel(renamed)}" starts again: its output path changed, and ${what} stay${old.type === 'cycles' ? '' : 's'} with the old path.`
           : `"${entryLabel(old)}" is deleted, and ${what} with it.`)
       } else if (measure(entry) !== before) {
+        // An entry that fills in from the history gets back what the
+        // history still holds.
+        const refill = entry.lookback === false ? '' : ' It fills in again from the history, as far as the history reaches.'
         lost.push(entry.type === 'cycles'
-          ? `"${entryLabel(entry)}" forgets the cycles counted so far: how its stretches are found changed (inputs, combination, smoothing, shortest stretch or stale timeout).`
-          : `"${entryLabel(entry)}" starts again from zero: what its total is measured from changed (input, direction, mode, threshold or reset rule).`)
+          ? `"${entryLabel(entry)}" forgets the cycles counted so far: how its stretches are found changed (inputs, combination, smoothing, shortest stretch or stale timeout).${refill}`
+          : entry.type === 'record'
+            ? `"${entryLabel(entry)}" starts its record again: what it keeps changed (input, what is kept, level or when it starts again).${refill}`
+            : `"${entryLabel(entry)}" starts again from zero: what its total is measured from changed (input, direction, mode, threshold or reset rule).${refill}`)
       }
     }
     return lost
@@ -1825,8 +1892,8 @@
     for (const [field, definition] of Object.entries(state.fields[raw.type].properties)) {
       const value = raw[field]
       if (value === undefined) continue
-      if (field === 'enabled') {
-        if (typeof value === 'boolean') entry.enabled = value
+      if (definition.type === 'boolean') {
+        if (typeof value === 'boolean') entry[field] = value
       } else if (field === 'inputs') {
         if (Array.isArray(value)) {
           const fields = definition.items.properties

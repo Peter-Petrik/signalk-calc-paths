@@ -93,4 +93,63 @@ function call (route, { params = {}, body } = {}) {
   return response
 }
 
-module.exports = { call, fakeApp, fakeRouter }
+/**
+ * A stand-in for a History API provider, answering as signalk-to-influxdb2
+ * 2.3.0 does: buckets aligned to whole multiples of the resolution since
+ * the epoch, stamped with their start, empty buckets left out, the bucket
+ * that holds `to` included, an error for a path it holds nothing for, and
+ * an error for the average of a switch stored as true and false.
+ *
+ * @param {object} samples - Per path, a list of { t, v } with t in epoch ms.
+ */
+function fakeHistory (samples) {
+  const history = {
+    requests: [],
+    async getValues (query) {
+      history.requests.push({ from: String(query.from), to: String(query.to), resolution: query.resolution, pathSpecs: query.pathSpecs })
+      if (history.fail) throw new Error(history.fail)
+      const from = Date.parse(String(query.from))
+      const to = Date.parse(String(query.to))
+      const size = query.resolution * 1000
+      const columns = query.pathSpecs.map((spec) => {
+        const list = samples[spec.path]
+        if (!list) throw new Error(`no measurement ${spec.path}`)
+        const buckets = new Map()
+        for (const sample of list) {
+          if (sample.t < from || sample.t > to) continue
+          const start = Math.floor(sample.t / size) * size
+          if (!buckets.has(start)) buckets.set(start, [])
+          buckets.get(start).push(sample.v)
+        }
+        const result = new Map()
+        for (const [start, values] of buckets) {
+          if (spec.aggregate === 'average' && values.some((v) => typeof v === 'boolean')) throw new Error('unsupported mean iterator type: *query.booleanInterruptibleIterator')
+          let v
+          if (spec.aggregate === 'min') v = Math.min(...values)
+          else if (spec.aggregate === 'max') v = Math.max(...values)
+          else if (spec.aggregate === 'last') v = values[values.length - 1]
+          else if (spec.aggregate === 'first') v = values[0]
+          else v = values.reduce((a, b) => a + b, 0) / values.length
+          result.set(start, v)
+        }
+        return result
+      })
+      const times = [...new Set(columns.flatMap((column) => [...column.keys()]))].sort((a, b) => a - b)
+      return {
+        context: 'vessels.self',
+        range: { from: String(query.from), to: String(query.to) },
+        values: query.pathSpecs.map((spec) => ({ path: spec.path, method: spec.aggregate })),
+        data: times.map((t) => [new Date(t).toISOString(), ...columns.map((column) => column.has(t) ? column.get(t) : null)])
+      }
+    },
+    async getPaths () {
+      return Object.keys(samples)
+    },
+    async getContexts () {
+      return ['vessels.self']
+    }
+  }
+  return history
+}
+
+module.exports = { call, fakeApp, fakeHistory, fakeRouter }

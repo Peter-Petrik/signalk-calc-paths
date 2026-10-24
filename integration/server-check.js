@@ -19,8 +19,9 @@
  * edited set through the editor's route and verifies that the unchanged
  * entries keep running. It publishes a time zone on a followed path,
  * the way a ship's time plugin would, and verifies that the plugin takes it
- * up. Last it adds a cycles entry on a switch it toggles itself, and checks
- * that an entry that stops sending leaves null on its output path.
+ * up. It adds a cycles entry on a switch it toggles itself, and checks
+ * that an entry that stops sending leaves null on its output path. Last it
+ * adds two records on a level it publishes itself.
  *
  * This file lives outside test/ on purpose: the Node.js test runner picks up
  * every file under a test directory, and this one needs a server.
@@ -315,6 +316,65 @@ async function main () {
   assert.equal(given.meta.units ?? null, null, `the unit ${given.meta.units} was left on the output of the entry switched off`)
   assert.equal(given.meta.displayName ?? null, null, `the name ${given.meta.displayName} was left on the output of the entry switched off`)
   console.log('  null is served on the output of an entry that stopped sending, without its unit and name')
+
+  // Two records on a level of the check's own: the highest value with the
+  // moment it was reached, published on a path of its own, and the time
+  // since the level was last at or above 0.9.
+  const LEVEL = 'calcPathsCheck.level'
+  const highest = { id: 'checkHighest', type: 'record', name: 'Check highest', input: LEVEL, keep: 'highest', resets: 'manual', staleTimeout: 0, output: 'calcPathsCheck.highest', timeOutput: 'calcPathsCheck.highestAt' }
+  const sinceFull = { id: 'checkSinceFull', type: 'record', name: 'Check time since full', input: LEVEL, keep: 'sinceAbove', level: 0.9, staleTimeout: 0, output: 'calcPathsCheck.sinceFull', timeOutput: 'calcPathsCheck.lastFull' }
+  const beforeRecords = await getJson(`/plugins/${PLUGIN}/api/config`)
+  assert.equal(beforeRecords.fields.record.properties.keep.enum.length, 4)
+  const withRecords = await fetch(`${BASE}/plugins/${PLUGIN}/api/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: beforeRecords.revision, groups: beforeRecords.groups, entries: [...beforeRecords.entries, highest, sinceFull] })
+  })
+  assert.equal(withRecords.status, 200, `saving the records answered ${withRecords.status}`)
+  await publish(LEVEL, 0.95)
+  await sleep(1500)
+  const fullAt = Date.now()
+  await publish(LEVEL, 0.5)
+  const highestNode = await eventually('the highest value', async () => {
+    const node = await selfPath('calcPathsCheck.highest')
+    return node && node.value === 0.95 ? node : null
+  })
+  assert.equal(highestNode.$source, PLUGIN)
+  assert.equal(highestNode.meta.displayName, 'Check highest')
+  const highestAt = await eventually('the moment of the highest value', async () => {
+    const node = await selfPath('calcPathsCheck.highestAt')
+    return node && typeof node.value === 'string' ? node : null
+  })
+  assert.ok(Math.abs(Date.parse(highestAt.value) - (fullAt - 1500)) < 10000, `the highest value is dated ${highestAt.value}`)
+  assert.equal(highestAt.meta.displayName, 'Check highest (time)')
+  // The time since grows by itself once the level is left.
+  const since = await eventually('the time since the level was left to grow', async () => {
+    const node = await selfPath('calcPathsCheck.sinceFull')
+    return node && typeof node.value === 'number' && node.value >= 2 ? node : null
+  })
+  assert.equal(since.meta.units, 's')
+  const lastFull = await selfPath('calcPathsCheck.lastFull')
+  assert.ok(Math.abs(Date.parse(lastFull.value) - fullAt) < 10000, `the level was last met at ${lastFull.value}`)
+  const recordStatus = (await getJson(`/plugins/${PLUGIN}/api/entries`)).entries
+  const highestEntry = recordStatus.find((e) => e.key === 'checkHighest')
+  const sinceEntry = recordStatus.find((e) => e.key === 'checkSinceFull')
+  assert.equal(highestEntry.record.value, 0.95)
+  assert.equal(highestEntry.canReset, true)
+  assert.equal(sinceEntry.canReset, false)
+  assert.equal(sinceEntry.atLevel, false)
+  // Without a history provider a look-back waits for one, or, on a server
+  // without the History API, gives up at once; either way the entry counts.
+  assert.ok(['waiting', 'failed'].includes(highestEntry.history && highestEntry.history.outcome), `look-back ${JSON.stringify(highestEntry.history)}`)
+  console.log(`  records publish the highest value ${highestNode.value} at ${highestAt.value}, and ${since.value} s since the level was last met; look-back ${highestEntry.history.outcome}: ${highestEntry.history.reason}`)
+  const restart = await resetRoute('calcPathsCheck.highest')
+  assert.equal(restart.status, 200, `starting the record again answered ${restart.status}`)
+  await eventually('the record to start again from the latest value', async () => {
+    const node = await selfPath('calcPathsCheck.highest')
+    return node && node.value === 0.5 ? node : null
+  })
+  const noReset = await resetRoute('calcPathsCheck.sinceFull')
+  assert.equal(noReset.status, 404, 'a time since should not be reset')
+  console.log('  a record starts again on request; a time since refuses')
 
   // Leave the server as it was found.
   const current = await getJson(`/plugins/${PLUGIN}/api/config`)

@@ -27,6 +27,7 @@ The plugin is plain JavaScript with no build step and one runtime dependency, `e
 | `index.js` | The adapter between the Signal K server and the engine: subscriptions, publishing, state saving, the HTTP routes the status page and the editor use. |
 | `lib/engine.js` | The calculations. It has no knowledge of Signal K and is driven by input values and two clock readings. |
 | `lib/cycles.js` | Finding the ON and OFF stretches of a cycles entry. |
+| `lib/history.js` | Reading the server's history through the History API for an entry that starts with nothing saved. |
 | `lib/periods.js` | Period boundaries in a time zone, including fixed offsets. |
 | `lib/timezone.js` | Which time zone is in use: the ship's time followed from Signal K paths, or the setting. |
 | `lib/formula.js` | Expression parsing and its restrictions. |

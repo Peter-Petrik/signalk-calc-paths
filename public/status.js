@@ -12,7 +12,7 @@
  */
 
 ;(function () {
-  const { SETTINGS_URL, api, element, everyday, figure, remembered, writeWithPaths } = window.CalcPaths
+  const { SETTINGS_URL, api, element, everyday, figure, remembered, shownUnit, writeWithPaths } = window.CalcPaths
   const API = `${window.CalcPaths.BASE}/entries`
   const POLL_MS = 2000
   // How long a "Confirm reset" button waits before it turns back.
@@ -87,6 +87,15 @@
     manual: 'reset only by hand'
   }
 
+  // When a record of a lowest or highest value starts again.
+  const RESTART_PHRASES = {
+    day: 'starts again every day',
+    week: 'starts again every week',
+    month: 'starts again every month',
+    year: 'starts again every year',
+    manual: 'starts again only by hand'
+  }
+
   /**
    * Formats an instant as a clock in the plugin's time zone shows it.
    *
@@ -96,8 +105,11 @@
    */
   function when (iso) {
     if (!iso) return ''
-    const options = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
     const instant = new Date(iso)
+    // A moment of another year, as a record or the history may hold, says
+    // which year.
+    const options = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+    if (Math.abs(Date.now() - instant.getTime()) > 300 * 24 * 3600 * 1000) options.year = 'numeric'
     const fixed = /^([+-])(\d{2}):(\d{2})$/.exec(timeZone || '')
     try {
       if (fixed) {
@@ -160,6 +172,7 @@
   function describeReset (record, entry) {
     if (!record || !record.at) return ''
     const at = when(record.at)
+    if (entry && entry.type === 'record') return describeRestart(record, entry, at)
     // The total a period ended with, when the plugin kept it, in the
     // reading the page shows for the entry's value.
     const closed = Number.isFinite(record.total) ? `; the ${record.period || 'period'} closed at ${withUnit(record.total, entry)}` : ''
@@ -178,6 +191,31 @@
       default:
         return ''
     }
+  }
+
+  /** Says why a record last started again. */
+  function describeRestart (record, entry, at) {
+    switch (record.cause) {
+      case 'period':
+        return ` Last started again ${at}: a new ${record.period || 'period'} began.`
+      case 'level':
+        return ` Last started again ${at}: ${entry.inputs[0]} came to ${inInputUnit(record.level, entry)}.`
+      case 'path': {
+        const fall = Number.isFinite(record.from) && Number.isFinite(record.to) ? ` fell from ${figure(record.from)} to ${figure(record.to)}` : ' fell'
+        return ` Last started again ${at}: ${record.path || 'the followed path'}${fall}.`
+      }
+      case 'request':
+        return ` Last started again ${at}: by request, from this page or the reset route.`
+      default:
+        return ''
+    }
+  }
+
+  /** A level of a record in its input's unit, shown as the editor shows it: 100 % for a ratio of 1. */
+  function inInputUnit (value, entry) {
+    if (!Number.isFinite(value)) return '–'
+    const shown = shownUnit(entry.inputUnit || null, false)
+    return `${figure(shown.show(value))}${shown.unit ? ` ${shown.unit}` : ''}`
   }
 
   /** A value with its unit, converted as the reading of the entry is: 2.4 kWh. */
@@ -254,10 +292,70 @@
     return `. Counted as their value when stale: ${items.join(', ')}.`
   }
 
+  /** What a record keeps, what it holds now, and since when. */
+  function describeRecord (entry) {
+    const input = entry.inputs[0]
+    const time = entry.timeOutput ? ` The moment is published on ${entry.timeOutput}.` : ''
+    if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') {
+      const level = `${entry.keep === 'sinceAbove' ? 'at or above' : 'at or below'} ${inInputUnit(entry.level, entry)}`
+      let now = ''
+      if (entry.atLevel) now = ' It is at the level now.'
+      else if (entry.lastMet) now = ` Last there ${when(entry.lastMet)}.`
+      return `Time since ${input} was last ${level}.${now}${time}`
+    }
+    const kind = entry.keep === 'highest' ? 'Highest' : 'Lowest'
+    let restart
+    if (entry.resets === 'level') restart = `starts again whenever it is ${entry.keep === 'highest' ? 'at or below' : 'at or above'} ${inInputUnit(entry.resetLevel, entry)}`
+    else if (entry.resets === 'path') restart = `starts again when ${entry.resetPath} resets`
+    else restart = RESTART_PHRASES[entry.resets] || RESTART_PHRASES.manual
+    const held = entry.record ? ` Reached ${when(entry.record.at)}.` : ' No value seen yet.'
+    const covers = entry.windowStart ? ` Covers the time since ${when(entry.windowStart)}.` : ''
+    return `${kind} value of ${input}, ${restart}.${held}${covers}${time}${describeReset(entry.lastReset, entry)}`
+  }
+
+  /**
+   * What the look-back of an entry found, or why it found nothing, so that
+   * a figure that includes the time before the entry started says so.
+   */
+  function describeHistory (entry) {
+    const h = entry.history
+    if (!h) {
+      if (entry.lookback === 'running') return ' Reading the history.'
+      if (entry.lookback === 'wanted') return ' The history is to be read.'
+      return ''
+    }
+    switch (h.outcome) {
+      case 'waiting':
+        return ` The history is not read yet: ${h.reason}. Trying again.`
+      case 'failed':
+      case 'skipped':
+        return ` Not filled in from the history: ${h.reason}.`
+      case 'empty':
+        return h.reason ? ` Not filled in from the history: ${h.reason}.` : ` The history held nothing for it before ${when(h.to)}.`
+      case 'filled': {
+        const span = h.from ? `from ${when(h.from)} to ${when(h.to)}` : `before ${when(h.to)}`
+        const steps = Number.isFinite(h.resolution) && h.resolution > 1 ? `, read in steps of ${duration(h.resolution)}` : ''
+        if (entry.type === 'cycles') return ` Filled in from the history: ${h.stretches} ${h.stretches === 1 ? 'stretch' : 'stretches'} ${span}${steps}.`
+        if (entry.type === 'record') {
+          if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') return ` Filled in from the history: last at the level ${when(h.found)}.`
+          return ` Filled in from the history ${span}: the ${entry.keep === 'highest' ? 'highest' : 'lowest'} there was reached ${when(h.found)}.`
+        }
+        return ` Filled in from the history: ${withUnit(h.amount, entry)} ${span}${steps}.`
+      }
+      default:
+        return ''
+    }
+  }
+
   /** One sentence saying what kind of entry this is and how it behaves. */
   function describe (entry) {
+    return describeKind(entry) + describeHistory(entry)
+  }
+
+  function describeKind (entry) {
     if (entry.type === 'formula') return `Formula: ${entry.expression}${describeSubstituted(entry)}`
     if (entry.type === 'cycles') return describeCycles(entry)
+    if (entry.type === 'record') return describeRecord(entry)
     const kind = entry.type === 'counter' ? 'Period counter' : 'Integration'
     const reset = entry.resets === 'path' ? `resets when ${entry.resetPath} resets` : RESET_PHRASES[entry.resets]
     const since = entry.since ? ` Counting since ${when(entry.since)}.` : ''
@@ -327,7 +425,7 @@
     if (!entry.canReset) return
 
     if (row.stage === 'confirm') {
-      const confirm = element('button', 'is-confirm', entry.type === 'cycles' ? 'Confirm: forget' : 'Confirm reset')
+      const confirm = element('button', 'is-confirm', { cycles: 'Confirm: forget', record: 'Confirm: start again' }[entry.type] || 'Confirm reset')
       confirm.type = 'button'
       confirm.addEventListener('click', () => reset(row, entry))
       const cancel = element('button', 'is-quiet', 'Cancel')
@@ -345,13 +443,16 @@
       return
     }
 
-    const cycles = entry.type === 'cycles'
-    const button = element('button', '', cycles ? 'Forget cycles' : 'Reset to zero')
+    const words = {
+      cycles: ['Forget cycles', `Forget the cycles counted for ${label}`],
+      record: ['Start again', `Start the record of ${label} again from the present value`]
+    }[entry.type] || ['Reset to zero', `Reset ${label} to zero`]
+    const button = element('button', '', words[0])
     button.type = 'button'
     // While the reset is on its way the button is marked unavailable but
     // stays able to hold keyboard focus, which a disabled button drops.
     if (row.stage === 'busy') button.setAttribute('aria-disabled', 'true')
-    button.setAttribute('aria-label', cycles ? `Forget the cycles counted for ${label}` : `Reset ${label} to zero`)
+    button.setAttribute('aria-label', words[1])
     button.addEventListener('click', () => {
       if (row.stage !== 'busy') setStage(row, entry, 'confirm')
     })
@@ -397,7 +498,7 @@
         body: '{}'
       })
       if (response.ok) {
-        showResult(row, entry, entry.type === 'cycles' ? 'Cycles forgotten' : 'Reset to zero', false)
+        showResult(row, entry, { cycles: 'Cycles forgotten', record: 'Started again' }[entry.type] || 'Reset to zero', false)
       } else if (response.status === 401 || response.status === 403) {
         showResult(row, entry, 'Not reset: this login may not change data', true)
       } else {
@@ -412,7 +513,7 @@
 
   /** The paths an entry's sentence may name, to be set in a code font. */
   function pathsOf (entry) {
-    return [entry.output, entry.resetPath, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path), ...(entry.substituted || []).map((input) => input.path)]
+    return [entry.output, entry.resetPath, entry.timeOutput, ...(entry.inputs || []), ...(entry.cycleInputs || []).map((input) => input.path), ...(entry.substituted || []).map((input) => input.path)]
   }
 
   function renderEntry (entry) {

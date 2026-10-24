@@ -407,6 +407,7 @@ An entry that starts with nothing saved begins at nothing: a counter of today's 
 5. **No provider.** A server without the History API is not asked. When the server has it but no provider has registered, which happens while the plugins are still starting, the entry asks again every 30 seconds for 15 minutes, counting from its start meanwhile. A path the history does not hold gives nothing.
 6. **What the status page says.** Under each such entry, a **From history** line: what was filled in, over which stretch and at what resolution, or that the history held nothing, or why it could not be read. The HTTP interface reports it as `history` (see [HTTP Interface](#http-interface)), and the record is saved with the state.
 7. **The provider decides what there is.** Only what the provider keeps can be read: its retention, what it was set to record, and the times it was running. `signalk-to-influxdb2` 2.3.0 reads only the bucket it writes to.
+8. **Which provider.** The history is read from the server's default history provider: the one named in the server's settings (`historyApi.defaultProvider` in `settings.json`), or else the first plugin that registered as one, which the server then keeps as the default. Several plugins can provide history. KIP, installed with the server, is one; it keeps the data of the paths its widgets chart, for about the last day. Where it is the default, an entry is filled in from KIP's history, or finds nothing there, and the status page says so.
 
 ### Stale Inputs
 

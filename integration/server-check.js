@@ -362,10 +362,13 @@ async function main () {
   assert.equal(highestEntry.canReset, true)
   assert.equal(sinceEntry.canReset, false)
   assert.equal(sinceEntry.atLevel, false)
-  // Without a history provider a look-back waits for one, or, on a server
-  // without the History API, gives up at once; either way the entry counts.
-  assert.ok(['waiting', 'failed'].includes(highestEntry.history && highestEntry.history.outcome), `look-back ${JSON.stringify(highestEntry.history)}`)
-  console.log(`  records publish the highest value ${highestNode.value} at ${highestAt.value}, and ${since.value} s since the level was last met; look-back ${highestEntry.history.outcome}: ${highestEntry.history.reason}`)
+  // The look-back finds nothing for a path of the check's own. A server
+  // whose plugins include a history provider, as KIP is in the plugin CI,
+  // answers that it holds nothing; without one the look-back waits for a
+  // provider, and on a server without the History API it gives up at once.
+  // Either way the entry counts from its start.
+  assert.ok(['empty', 'waiting', 'failed'].includes(highestEntry.history && highestEntry.history.outcome), `look-back ${JSON.stringify(highestEntry.history)}`)
+  console.log(`  records publish the highest value ${highestNode.value} at ${highestAt.value}, and ${since.value} s since the level was last met; look-back ${highestEntry.history.outcome}${highestEntry.history.reason ? `: ${highestEntry.history.reason}` : ''}`)
   const restart = await resetRoute('calcPathsCheck.highest')
   assert.equal(restart.status, 200, `starting the record again answered ${restart.status}`)
   await eventually('the record to start again from the latest value', async () => {

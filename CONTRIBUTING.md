@@ -63,7 +63,7 @@ npm link signalk-calc-paths
 npm test
 ```
 
-This checks the syntax of `index.js` and runs the test suite with the Node.js test runner. No test framework is installed. Node.js 22 or later is required.
+This checks the syntax of `index.js` and runs the test suite with the Node.js test runner. No test framework is installed. Node.js 22 or later is required. The tests pass in any time zone; a change that touches dates is also run under a zone far from UTC, such as `TZ=Pacific/Kiritimati npm test` and `TZ=America/Los_Angeles npm test`.
 
 The engine takes its time from the caller, so a test can replay hours or days of input in milliseconds. New behaviour in `lib/engine.js` or `lib/cycles.js` is expected to come with a test under `test/` that fails without the change.
 

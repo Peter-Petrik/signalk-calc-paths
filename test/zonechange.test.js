@@ -48,6 +48,12 @@ function harness (options, { zone = 'UTC', saved = null, base = '2026-10-10T00:0
 // The inputs in these tests arrive minutes apart, so the entries are given a
 // stale timeout of zero: what is tested here is the calendar, not staleness.
 const dailyCounter = { counters: [{ input: 'a.total', output: 'a.today', resets: 'day', staleTimeout: 0 }] }
+// The same entry with UTC chosen in the settings. State saved by version
+// 0.1.0 holds only the instant its period began, which is read in the zone
+// from the settings; left unset, that is the zone of the machine running the
+// tests, and a test written for UTC would date the period a day early on a
+// machine west of Greenwich.
+const dailyCounterUtc = { timeZone: 'UTC', ...dailyCounter }
 
 // In October 2026 Rome is two hours ahead of UTC and Athens three. Midnight
 // in Athens is 21:00 UTC; midnight in Rome is 22:00 UTC.
@@ -329,7 +335,7 @@ test('state saved by version 0.1.0 is taken over without losing the day\'s total
       }
     }
   }
-  const h = harness(dailyCounter, { zone: 'UTC', saved })
+  const h = harness(dailyCounterUtc, { zone: 'UTC', saved })
   h.input('2026-10-10T12:30:00Z', 'a.total', 1600)
   h.tick('2026-10-10T12:30:00Z')
   assert.equal(h.value('a.today'), 600)
@@ -354,7 +360,7 @@ test('state saved by version 0.1.0 before a boundary rolls over at the first che
       }
     }
   }
-  const h = harness(dailyCounter, { zone: 'UTC', saved })
+  const h = harness(dailyCounterUtc, { zone: 'UTC', saved })
   h.input('2026-10-10T08:00:00Z', 'a.total', 1650)
   h.tick('2026-10-10T08:00:00Z')
   assert.equal(h.value('a.today'), 150)
@@ -380,7 +386,7 @@ test('a period dated far in the future by a wrong clock is pulled back', () => {
       }
     }
   }
-  const h = harness(dailyCounter, { zone: 'UTC', saved })
+  const h = harness(dailyCounterUtc, { zone: 'UTC', saved })
   h.input('2026-10-10T12:00:00Z', 'a.total', 1600)
   h.tick('2026-10-10T12:00:00Z')
   assert.equal(h.value('a.today'), 600)
@@ -407,7 +413,7 @@ test('a saved date key that is not a date is worked out again', () => {
       }
     }
   }
-  const h = harness(dailyCounter, { zone: 'UTC', saved })
+  const h = harness(dailyCounterUtc, { zone: 'UTC', saved })
   h.input('2026-10-10T12:00:00Z', 'a.total', 1600)
   h.tick('2026-10-10T12:00:00Z')
   assert.equal(h.value('a.today'), 600)

@@ -628,7 +628,9 @@ test('a custom path can carry the zone', (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] })
   const app = fakeApp()
   const plugin = createPlugin(app)
-  plugin.start({ timeZoneRegionPath: 'my.ship.zone', timeZoneOffsetPath: 'my.ship.offset', ...daily })
+  // UTC as the zone when none is published, so that Europe/Athens below is
+  // never the fallback, whatever zone the machine running the test keeps.
+  plugin.start({ timeZone: 'UTC', timeZoneRegionPath: 'my.ship.zone', timeZoneOffsetPath: 'my.ship.offset', ...daily })
   assert.deepEqual(app.subscriptions[0].command.subscribe, [{ path: 'c.total' }, { path: 'my.ship.zone' }, { path: 'my.ship.offset' }])
   // The standard path is no longer listened to.
   app.send(REGION, 'Europe/Athens')
@@ -693,7 +695,11 @@ test('the same published values give the same zone live and at a restart', (t) =
   const published = '2026-10-26T08:00:00.000Z'
   const app = fakeApp()
   let plugin = createPlugin(app)
-  plugin.start(daily)
+  // UTC as the zone when none is published: the entry's first period is
+  // dated before the followed zone arrives, and a machine far east of
+  // Athens would date it a day later.
+  const settings = { timeZone: 'UTC', ...daily }
+  plugin.start(settings)
   app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: published, values: [{ path: OFFSET, value: 300 }] }] })
   app.subscriptions[0].callback({ context: 'vessels.self', updates: [{ $source: 'ships-time', timestamp: published, values: [{ path: REGION, value: 'Europe/Athens' }] }] })
   assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
@@ -710,7 +716,7 @@ test('the same published values give the same zone live and at a restart', (t) =
   })
   held.dataDir = app.dataDir
   plugin = createPlugin(held)
-  plugin.start(daily)
+  plugin.start(settings)
   assert.equal(statusOf(plugin).timeZone, 'Europe/Athens')
   held.send('c.total', 1600)
   t.mock.timers.tick(1000)

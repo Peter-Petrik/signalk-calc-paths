@@ -18,18 +18,18 @@
  */
 
 ;(function () {
-  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, api, button, element, everyday, figure, readNumber, shownUnit } = window.CalcPaths
+  const { NAME_PATTERN, OUTPUT_PATTERN, PATH_PATTERN, SETTINGS_URL, api, button, element, everyday, figure, pathCode, readNumber, shownUnit } = window.CalcPaths
 
   const view = document.getElementById('edit-view')
   const PATHS_POLL_MS = 10000
   const PREVIEW_DELAY_MS = 400
 
   const TYPES = {
-    formula: { label: 'Formula', explain: 'Calculates a value from live values: power from current and voltage, a sum of several sources, a unit conversion.' },
-    counter: { label: 'Period counter', explain: 'Reports how much a running total has grown or fallen since the start of the day, week, month or year: today\'s yield from a lifetime counter, fuel used from a tank level.' },
-    integration: { label: 'Integration', explain: 'Adds up a value over time: energy from power, volume from a flow, distance from speed, or the time something was on.' },
-    cycles: { label: 'Cycles', explain: 'Finds the ON and OFF stretches of a device that cycles, such as a fridge compressor or a pump, from a switch, a threshold or a rising and falling value, and reports how long they last.' },
-    record: { label: 'Record', explain: 'Keeps the lowest or highest value of a path with the moment it was reached, or the time since a path was last at a level: the lowest charge since the battery was last full, the time since it was last full.' }
+    formula: { label: 'Formula', explain: 'A value worked out from live values: power from current and voltage, a sum of sources, a unit conversion.' },
+    counter: { label: 'Period counter', explain: 'How much a running total has changed since the start of the day, week, month or year: today\'s yield, fuel used.' },
+    integration: { label: 'Integration', explain: 'A value added up over time: energy from power, volume from a flow, or the time something was on.' },
+    cycles: { label: 'Cycles', explain: 'How long a device that cycles, such as a fridge compressor or a pump, runs and rests.' },
+    record: { label: 'Record', explain: 'The lowest or highest value of a path, or the time since it was last at a level, such as a full battery.' }
   }
 
   // Units offered while typing; any other text is accepted too.
@@ -63,9 +63,11 @@
     faults: Object.create(null),
     // The saved set as canonical JSON, to tell whether anything differs.
     savedKey: null,
-    // Whether the "More" actions are unfolded on a narrow screen.
+    // Whether the actions folded behind "Actions" are unfolded on a narrow screen.
     moreOpen: false,
     expanded: new Set(),
+    // The entries whose Advanced settings are unfolded, by id.
+    advanced: new Set(),
     paths: new Map(),
     pathsKey: '',
     notice: null,
@@ -272,18 +274,39 @@
     return { control, refresh }
   }
 
-  /** A field's title with a Help button that shows its help on a narrow screen. */
+  /**
+   * A field's title with a More button. Under each field one line says what
+   * it is for; More replaces that line with the full help and Less brings it
+   * back, so a form can be scanned and the detail is there when it is
+   * wanted.
+   */
   function fieldHead (label, wrap) {
     const head = element('div', 'field-head')
-    const toggle = button('Help', 'is-quiet help-toggle', () => {
+    // The accessible name starts with the visible word, so a voice command
+    // that says what is on screen ("click Less") reaches it.
+    const about = label.textContent.replace(/ \(.*\)$/, '')
+    const toggle = button('More', 'is-quiet help-toggle', () => {
       const open = !wrap.classList.contains('help-open')
       wrap.classList.toggle('help-open', open)
       toggle.setAttribute('aria-expanded', String(open))
+      toggle.textContent = open ? 'Less' : 'More'
+      toggle.setAttribute('aria-label', `${open ? 'Less' : 'More'} about ${about}`)
     })
     toggle.setAttribute('aria-expanded', 'false')
-    toggle.setAttribute('aria-label', `Help for ${label.textContent}`)
+    toggle.setAttribute('aria-label', `More about ${about}`)
     head.append(label, toggle)
     return head
+  }
+
+  /**
+   * The help of a field: its one-line summary, always shown, and its full
+   * description, shown on request. A field without a summary shows its
+   * description as it is, with no More button.
+   */
+  function helpOf (definition, description = definition.description) {
+    if (!description) return { head: false, nodes: [] }
+    if (!definition.summary) return { head: false, nodes: [element('p', 'field-summary', description)] }
+    return { head: true, nodes: [element('p', 'field-summary', definition.summary), element('p', 'field-help', description)] }
   }
 
   /** Points each Help button at the help it shows. */
@@ -308,6 +331,9 @@
    */
   function describePath (path, publishedFirst) {
     if (!path) return ''
+    // A typing mistake is said as such, rather than as a path that holds
+    // no value, which would send the user looking for a silent device.
+    if (!PATH_PATTERN.test(path)) return 'Not a valid path: use dot-separated segments of letters, digits, dashes and underscores, with no spaces.'
     const known = state.paths.get(path)
     const producer = state.entries.find((entry) => entry.output === path)
     const from = producer ? ` Published by the entry "${entryLabel(producer)}".` : ''
@@ -370,16 +396,19 @@
       return { problem: 'This login may read the calculated paths but not change them. Log in as a user with read/write permission to edit the entries.' }
     }
     if (!result.ok || !result.body) {
-      return { problem: result.body && result.body.error ? result.body.error : `The server answered ${result.status}.` }
+      // A plugin that is not running can be enabled from its settings page,
+      // so the message links there, as the status view does.
+      const off = result.status === 503 && result.body && result.body.error && !result.body.blocked
+      return { problem: result.body && result.body.error ? result.body.error : `The server answered ${result.status}.`, link: off ? { text: 'Open the configuration', href: SETTINGS_URL } : null }
     }
     state.permitted = true
     return { body: result.body }
   }
 
   async function load () {
-    const { body, problem } = await fetchSet()
+    const { body, problem, link } = await fetchSet()
     if (problem) {
-      showMessage(problem)
+      showMessage(problem, link)
       return false
     }
     take(body)
@@ -394,6 +423,7 @@
     state.blocked = body.blocked
     state.fields = body.fields
     state.order = body.order
+    state.advancedFields = body.advanced || null
     state.groups = clone(body.groups)
     state.entries = clone(body.entries)
     state.dirty = false
@@ -429,7 +459,7 @@
     // taken on a later look.
     const active = document.activeElement
     if (view.contains(active) && active.closest('.confirm')) return
-    if ([...view.querySelectorAll('.adder-choices')].some((choices) => !choices.hidden)) return
+    if ([...view.querySelectorAll('.adder-choices')].some((choices) => !choices.hidden && !choices.dataset.auto)) return
     const focus = view.contains(active) ? selectorFor(active) : null
     take(body)
     state.notice = notice('info', 'The entries were changed elsewhere. The editor now shows them as saved there.')
@@ -474,8 +504,14 @@
     return state.permitted
   }
 
-  function showMessage (text) {
-    view.replaceChildren(element('p', 'placeholder', text))
+  function showMessage (text, link) {
+    const message = element('p', 'placeholder', text)
+    if (link) {
+      const anchor = element('a', '', link.text)
+      anchor.href = link.href
+      message.append(' ', anchor)
+    }
+    view.replaceChildren(message)
   }
 
   // ------------------------------------------------------------- drawing
@@ -517,8 +553,8 @@
       const target = find(focus)
       if (target) {
         target.focus()
-        // On a narrow screen a button under a folded "More" cannot take
-        // focus; the More button takes it instead.
+        // On a narrow screen a button under a folded "Actions" cannot take
+        // focus; the Actions button takes it instead.
         const more = view.querySelector('.toolbar-more-toggle')
         if (document.activeElement !== target && more && target.closest('.toolbar-more')) more.focus()
       }
@@ -591,9 +627,10 @@
     const more = element('div', 'toolbar-more')
     more.id = 'toolbar-more'
     more.append(expandButton(null), addGroup, exportButton, importLabel)
-    // On a narrow screen the less frequent actions fold behind "More", so
-    // the bar that stays at the top takes one line.
-    const moreToggle = button('More', 'is-quiet toolbar-more-toggle', () => {
+    // On a narrow screen the less frequent actions fold behind "Actions", so
+    // the bar that stays at the top takes one line. It is not called "More",
+    // which is the label of every field's help toggle.
+    const moreToggle = button('Actions', 'is-quiet toolbar-more-toggle', () => {
       state.moreOpen = !state.moreOpen
       bar.classList.toggle('is-more-open', state.moreOpen)
       moreToggle.setAttribute('aria-expanded', String(state.moreOpen))
@@ -701,9 +738,10 @@
       tools.append(expandGroup, up, down, remove)
       head.append(name, tools)
     } else {
-      head.append(element('h2', 'edit-group-title', 'Not in a group'))
-      // Without groups the button in the editing bar does the same.
+      // Without groups there is nothing else to tell these entries from, so
+      // the block has no heading; the button in the editing bar expands.
       if (state.groups.length > 0) {
+        head.append(element('h2', 'edit-group-title', 'Not in a group'))
         const tools = element('div', 'edit-group-tools')
         tools.append(expandButton(''))
         head.append(tools)
@@ -715,7 +753,10 @@
     list.dataset.group = id || ''
     const entries = state.entries.filter((entry) => (entry.group || null) === id)
     for (const entry of entries) list.append(renderCard(entry, entries))
-    if (entries.length === 0) list.append(element('li', 'cards-empty', group ? 'No entries in this group yet. Add one below, or drag one here.' : 'No entries outside the groups.'))
+    if (entries.length === 0) {
+      const empty = group ? 'No entries in this group yet. Add one below, or drag one here.' : state.groups.length === 0 ? 'No entries yet. Choose what to calculate:' : 'No entries outside the groups.'
+      list.append(element('li', 'cards-empty', empty))
+    }
     addDropTarget(list, id)
     section.append(list)
     section.append(renderAdder(id))
@@ -727,19 +768,55 @@
     const wrap = element('div', 'adder')
     const open = button('Add entry', '', () => {
       choices.hidden = !choices.hidden
+      delete choices.dataset.auto
       open.setAttribute('aria-expanded', String(!choices.hidden))
       if (!choices.hidden) choices.querySelector('button').focus()
     })
-    open.setAttribute('aria-expanded', 'false')
     const choices = element('div', 'adder-choices')
-    choices.hidden = true
+    // With no entries at all the choice of a first entry is open at once.
+    const first = groupId === null && state.entries.length === 0 && state.groups.length === 0
+    choices.hidden = !first
+    if (first) choices.dataset.auto = 'true'
     for (const [type, info] of Object.entries(TYPES)) {
       const choice = button('', 'adder-choice', () => addEntry(type, groupId))
       choice.append(element('strong', '', info.label), element('span', '', info.explain))
       choices.append(choice)
     }
+    open.setAttribute('aria-expanded', String(!choices.hidden))
     wrap.append(open, choices)
     return wrap
+  }
+
+  /** The fields of a type folded under "Advanced settings", as the plugin lists them. */
+  function advancedOf (type) {
+    return (state.advancedFields && state.advancedFields[type]) || []
+  }
+
+  /**
+   * Names, on the folded section's own line, the advanced settings that
+   * differ from their defaults, so a folded section hides nothing that was
+   * changed. A section holding a field with a fault opens.
+   */
+  function describeAdvanced (entry, live) {
+    if (!live.advanced) return
+    const properties = state.fields[entry.type].properties
+    const changed = advancedOf(entry.type).filter((field) => {
+      if (!(field in properties) || !applies(entry, field)) return false
+      const value = entry[field]
+      if (value === undefined || value === null || value === '') return false
+      return 'default' in properties[field] ? canonical(value) !== canonical(properties[field].default) : true
+    }).map((field) => properties[field].title.replace(/ \(.*\)$/, ''))
+    live.advanced.title.replaceChildren('Advanced settings', element('span', 'advanced-note', changed.length === 0 ? ' (all at their defaults)' : ` (changed: ${changed.join(', ')})`))
+    const faulty = (state.faults[entry.id] || []).some((fault) => fault.field && advancedOf(entry.type).includes(fault.field))
+    if (faulty) live.advanced.details.open = true
+  }
+
+  /**
+   * The output path under a card's title, wrapping only after a dot as the
+   * status page does, so a narrow screen never breaks a segment in two.
+   */
+  function showOutput (node, path) {
+    node.replaceChildren(path ? pathCode(path) : element('span', 'card-output-none', 'no output path yet'))
   }
 
   function renderCard (entry, siblings) {
@@ -771,8 +848,9 @@
     toggle.setAttribute('aria-expanded', String(expanded))
     toggle.dataset.focus = `toggle-${entry.id}`
     const title = element('span', 'card-title', entryLabel(entry))
-    const kind = element('span', 'card-kind', TYPES[entry.type].label + (entry.enabled === false ? ', switched off' : ''))
-    const output = element('code', 'card-output', entry.output || 'no output path yet')
+    const kind = element('span', 'card-kind', TYPES[entry.type].label + (entry.enabled === false ? ', disabled' : ''))
+    const output = element('span', 'card-output')
+    showOutput(output, entry.output)
     toggle.append(title, kind, output)
     toggle.addEventListener('click', () => {
       if (state.expanded.has(entry.id)) state.expanded.delete(entry.id)
@@ -802,8 +880,25 @@
     const body = element('div', 'card-body')
     body.hidden = !expanded
     const form = element('div', 'card-form')
-    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], unitFields: [], rows: new Map(), chain: null, preview: null, previewTimer: null, previewAsked: 0 }
-    for (const field of orderedFields(entry.type)) form.append(renderField(entry, field, live))
+    const live = { title, kind, output, error, body, hints: new Map(), inputHints: [], unitFields: [], unitNotes: [], rows: new Map(), chain: null, preview: null, previewTimer: null, previewAsked: 0 }
+    // The settings most entries leave at their defaults sit in a folded
+    // section at the end, so the form shows first what defines the entry.
+    const advanced = element('details', 'advanced-settings')
+    const advancedTitle = element('summary')
+    advanced.append(advancedTitle)
+    advanced.open = state.advanced.has(entry.id)
+    advanced.addEventListener('toggle', () => {
+      if (advanced.open) state.advanced.add(entry.id)
+      else state.advanced.delete(entry.id)
+    })
+    live.advanced = { details: advanced, title: advancedTitle }
+    for (const field of orderedFields(entry.type)) {
+      const row = renderField(entry, field, live)
+      if (advancedOf(entry.type).includes(field)) advanced.append(row)
+      else form.append(row)
+    }
+    if (advanced.childElementCount > 1) form.append(advanced)
+    describeAdvanced(entry, live)
     const chain = element('p', 'card-chain')
     live.chain = chain
     const footer = element('div', 'card-footer')
@@ -848,6 +943,10 @@
     }
     item.addEventListener('input', unmark, true)
     item.addEventListener('change', unmark, true)
+    // After the field's own handler has stored the value: the folded
+    // section's line names what differs from the defaults.
+    item.addEventListener('input', () => describeAdvanced(entry, live))
+    item.addEventListener('change', () => describeAdvanced(entry, live))
     addCardDrop(item, entry)
     state.cards.set(entry.id, live)
     refreshCard(entry.id)
@@ -860,7 +959,7 @@
     error.hidden = !state.errors[entry.id]
     if (faults.length > 1) {
       const list = element('ul')
-      for (const item of faults) list.append(element('li', '', `${item.text}.`))
+      for (const item of faults) list.append(element('li', '', `${item.text.charAt(0).toUpperCase()}${item.text.slice(1)}.`))
       error.replaceChildren(element('p', '', 'Cannot run as set:'), list)
     } else {
       error.textContent = state.errors[entry.id] ? `Cannot run as set: ${state.errors[entry.id]}.` : ''
@@ -953,23 +1052,21 @@
       box.addEventListener('change', () => {
         entry[field] = box.checked
         markDirty()
-        live.kind.textContent = TYPES[entry.type].label + (entry.enabled === false ? ', switched off' : '')
+        live.kind.textContent = TYPES[entry.type].label + (entry.enabled === false ? ', disabled' : '')
         live.title.closest('.card').classList.toggle('is-off', entry.enabled === false)
       })
       const label = element('label', 'field-check')
       label.htmlFor = fieldId
-      label.append(box, ` ${field === 'enabled' ? 'Switched on' : definition.title}`)
-      if (field !== 'enabled' && definition.description) {
-        wrap.append(fieldHead(label, wrap), element('p', 'field-help', definition.description))
-      } else {
-        wrap.append(label)
-      }
+      label.append(box, ` ${definition.title}`)
+      const help = helpOf(definition)
+      wrap.append(help.head ? fieldHead(label, wrap) : label, ...help.nodes)
       return wrap
     }
 
     const label = element('label', 'field-label', definition.title)
     label.htmlFor = fieldId
-    wrap.append(definition.description ? fieldHead(label, wrap) : label)
+    const help = helpOf(definition)
+    wrap.append(help.head ? fieldHead(label, wrap) : label)
     // A node shown under the control, for a field that has one.
     let after = null
     let control
@@ -1027,11 +1124,25 @@
       })
     } else if (definition.type === 'number' && unitField(entry.type, field)) {
       // In the unit of the input path, shown as the rules editor shows it.
+      // A path that announces no unit is compared as published: a battery
+      // charge without a unit may be a ratio, where full is 1, not 100. The
+      // note says so with the value the input holds now, so that a level
+      // typed in the wrong scale shows before it is saved.
+      const note = element('p', 'field-hint')
+      const explainScale = () => {
+        const known = state.paths.get(entry.input)
+        const show = Boolean(entry.input) && !unitsOf(entry.input) && Boolean(known) && typeof known.value === 'number'
+        note.hidden = !show
+        note.textContent = show ? `No unit is announced for the input, so this is compared with its value as published (now ${figure(known.value)}).` : ''
+      }
       const number = unitNumber(entry, field, definition.default, () => entry.input, field === 'minStep', (unit) => {
         label.textContent = `${definition.title} (${unit || 'in the input\'s unit'})`
+        explainScale()
       })
       live.unitFields.push(number)
+      live.unitNotes.push(explainScale)
       control = number.control
+      after = note
     } else {
       control = element('input')
       control.type = 'text'
@@ -1059,14 +1170,17 @@
         markDirty()
         if (field === 'name' || field === 'output') {
           live.title.textContent = entryLabel(entry)
-          live.output.textContent = entry.output || 'no output path yet'
+          showOutput(live.output, entry.output)
         }
         if (PATH_FIELDS.has(field)) {
           checkPath(control, field, entry[field])
           refreshChains()
         }
         if (PATH_FIELDS.has(field)) refreshHint(live, field, entry[field])
-        if (field === 'input') for (const number of live.unitFields) number.refresh()
+        if (field === 'input') {
+          for (const number of live.unitFields) number.refresh()
+          for (const explainScale of live.unitNotes) explainScale()
+        }
         if (field === 'staleTimeout' && entry.type === 'formula') schedulePreview(entry, live)
       })
     }
@@ -1090,7 +1204,7 @@
       live.preview.setAttribute('aria-live', 'polite')
       wrap.append(live.preview)
     }
-    if (definition.description) wrap.append(element('p', 'field-help', definition.description))
+    wrap.append(...help.nodes)
     return wrap
   }
 
@@ -1181,12 +1295,14 @@
       const fields = table.querySelectorAll('.input-path')
       if (fields.length > 0) fields[fields.length - 1].focus()
     })
-    wrap.append(table, add, element('p', 'field-help', `${names.description} ${paths.description}`))
-    if (whenStaleField) {
-      const line = element('p', 'field-help')
-      line.append(element('strong', '', `${whenStaleField.title}: `), whenStaleField.description)
-      wrap.append(line)
+    // The help names each part of an input row, as the row shows them.
+    const details = element('div', 'field-help')
+    for (const part of [names, paths, whenStaleField].filter(Boolean)) {
+      const line = element('p')
+      line.append(element('strong', '', `${part.title}: `), part.description)
+      details.append(line)
     }
+    wrap.append(table, add, element('p', 'field-summary', definition.summary || ''), details)
     return wrap
   }
 
@@ -1308,12 +1424,13 @@
       if (fields.length > 0) fields[fields.length - 1].focus()
     })
     const help = element('div', 'field-help')
+    help.append(element('p', '', definition.description))
     for (const field of ['kind', 'threshold', 'direction', 'swing']) {
       const line = element('p')
       line.append(element('strong', '', `${item[field].title}: `), item[field].description)
       help.append(line)
     }
-    wrap.append(table, add, element('p', 'field-help', definition.description), help)
+    wrap.append(table, add, element('p', 'field-summary', definition.summary || ''), help)
     return wrap
   }
 
@@ -1340,6 +1457,16 @@
     const hint = live.hints.get(field)
     if (!hint) return
     if (OUTPUT_FIELDS.has(field)) {
+      // An empty field writes nothing: without this, every other entry
+      // with an empty path for the time would count as writing it.
+      if (!value) {
+        hint.textContent = ''
+        return
+      }
+      if (!OUTPUT_PATTERN.test(value)) {
+        hint.textContent = 'Not a valid path: use at least two dot-separated segments of letters, digits, dashes and underscores, with no spaces.'
+        return
+      }
       const others = state.entries.filter((entry) => entry.output === value || entry.timeOutput === value)
       const known = state.paths.get(value)
       if (others.length > 1) hint.textContent = 'Another entry already writes this path.'
@@ -1361,6 +1488,7 @@
       if (unit) unit.textContent = unitsOf(input.path) || ''
     }
     for (const number of live.unitFields) number.refresh()
+    for (const explainScale of live.unitNotes) explainScale()
     refreshChain(entry, live)
     // The preview asks the server, so only open cards keep it current.
     if (entry.type === 'formula' && !live.body.hidden) schedulePreview(entry, live, 0)
@@ -1429,7 +1557,7 @@
       } else if (!result.ok) {
         live.preview.textContent = `Not checked: the server answered ${result.status}.`
       } else if (body.error) {
-        live.preview.textContent = `Not yet: ${body.error}.`
+        live.preview.textContent = `Cannot calculate: ${body.error}.`
         live.preview.classList.add('is-error')
       } else if (body.missing) {
         live.preview.textContent = `No result yet: no value on ${body.missing.join(', ')} at the moment.${describeSubstituted(body.substituted)}`
@@ -1715,7 +1843,7 @@
         lost.push(entry.type === 'cycles'
           ? `"${entryLabel(entry)}" forgets the cycles counted so far: how its stretches are found changed (inputs, combination, smoothing, shortest stretch or stale timeout).${refill}`
           : entry.type === 'record'
-            ? `"${entryLabel(entry)}" starts its record again: what it keeps changed (input, what is kept, level or when it starts again).${refill}`
+            ? `"${entryLabel(entry)}" starts its record again: what it keeps changed (input, what is kept, level or reset rule).${refill}`
             : `"${entryLabel(entry)}" starts again from zero: what its total is measured from changed (input, direction, mode, threshold or reset rule).${refill}`)
       }
     }
@@ -1783,6 +1911,9 @@
       takeFaults(answer)
       for (const id of Object.keys(state.errors)) state.expanded.add(id)
       const lines = [answer.error || `The server answered ${result.status}. Nothing was saved.`, ...(answer.errors || [])]
+      // The way out is said where the problem is reported: an entry can be
+      // saved unfinished once it is disabled.
+      if (Object.keys(state.errors).length > 0) lines.push('Correct the marked fields, or clear Enabled to save an entry unfinished.')
       setNotice('error', lines.join(' '), true)
       const first = Object.keys(state.errors)[0]
       if (first) {
@@ -1805,11 +1936,14 @@
       state.savedKey = canonical(sent)
       state.revision = answer.revision
     }
-    const kept = answer.kept === 1 ? '1 entry kept running' : `${answer.kept} entries kept running`
-    const started = answer.started === 1 ? '1 entry started' : `${answer.started} entries started`
+    // Only the counts that are not zero are said: "Saved. 1 entry started."
+    const counted = (n, what) => (n === 1 ? `1 entry ${what}` : `${n} entries ${what}`)
+    const parts = []
+    if (answer.started > 0) parts.push(counted(answer.started, 'started'))
+    if (answer.kept > 0) parts.push(`${counted(answer.kept, 'kept running')} without interruption`)
     const more = state.dirty ? ' Changes made since are not saved yet.' : ''
     if (answer.warning) setNotice('warning', `Saved. ${answer.warning}`, true)
-    else setNotice('info', `Saved. ${kept} without interruption, ${started}.${more}`, true)
+    else setNotice('info', `Saved.${parts.length > 0 ? ` ${parts.join(', ')}.` : ''}${more}`, true)
     window.CalcPaths.status.refresh()
   }
 
@@ -2009,8 +2143,34 @@
     }
   })
 
+  // An entry to open once the entries are drawn, as asked by an Edit link
+  // on the status page.
+  let revealId = null
+
+  /** Opens an entry's card, brings it into view and puts focus on its title. */
+  function reveal () {
+    const id = revealId
+    if (!id || !state.loaded) return
+    revealId = null
+    if (!entryById(id)) return
+    state.expanded.add(id)
+    const selector = `[data-focus="${window.CSS.escape(`toggle-${id}`)}"]`
+    render(selector)
+    const toggle = find(selector)
+    if (toggle) toggle.closest('.card').scrollIntoView({ block: 'start' })
+  }
+
   window.CalcPaths.editor = {
     probe,
+    /**
+     * Asks for an entry's card to be opened when the editor shows. While
+     * the editor is hidden nothing can take focus or scroll, so the card is
+     * opened by show(), once the view is visible.
+     */
+    open (id) {
+      revealId = id
+      if (visible) reveal()
+    },
     async show () {
       visible = true
       // The header (the time zone in use) and the footer (version, last
@@ -2028,6 +2188,7 @@
             if (await load()) {
               await loadPaths()
               render()
+              reveal()
             }
             return
           }
@@ -2040,8 +2201,11 @@
         if (!(await load())) return
         await loadPaths()
         render()
+        reveal()
         return
       }
+      // An entry asked for by an Edit link on the status page.
+      reveal()
       // The set may have been changed elsewhere while another view showed.
       const toolbar = view.querySelector('.editor-toolbar')
       if (toolbar) watchToolbar(toolbar)

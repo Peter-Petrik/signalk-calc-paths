@@ -24,6 +24,14 @@
   }
 
   function show () {
+    // #edit=<id> opens the editor with that entry's card open, as the Edit
+    // link of an entry on the status page asks; the address then reads
+    // #edit again, so going back and forth does not reopen it.
+    const asked = /^#edit=(.+)$/.exec(window.location.hash)
+    if (asked) {
+      window.history.replaceState(null, '', '#edit')
+      window.CalcPaths.editor.open(decodeURIComponent(asked[1]))
+    }
     const editing = window.location.hash === '#edit'
     statusView.hidden = editing
     editView.hidden = !editing
@@ -44,6 +52,9 @@
   window.addEventListener('hashchange', show)
   show()
   window.CalcPaths.editor.probe().then((permitted) => {
-    if (permitted) tabs.hidden = false
+    if (!permitted) return
+    tabs.hidden = false
+    // The Edit links under the entries on the status page show too.
+    document.body.classList.add('can-edit')
   })
 })()

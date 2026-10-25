@@ -16,6 +16,8 @@
   --rule: #d5dde0;
   --shoal: #0d5c7d;
   --shoal-wash: #e3eff3;
+  --caution-wash: #fbf1df;
+  --port-wash: #fbe9e7;
   --starboard: #1a7a52;
   --caution: #985a08;
   --port: #b3261e;
@@ -34,6 +36,8 @@
     --rule: #2a3c47;
     --shoal: #6fc3df;
     --shoal-wash: #1c323d;
+    --caution-wash: #33291a;
+    --port-wash: #3a2224;
     --starboard: #5fcf9b;
     --caution: #e5b25a;
     --port: #ff8a80;
@@ -131,10 +135,13 @@ label.file-button:focus-within {
 }
 
 .notice.is-warning {
+  background: var(--caution-wash);
   border-left-color: var(--caution);
 }
 
+/* A refusal looks unlike a report, not only by its stripe. */
 .notice.is-error {
+  background: var(--port-wash);
   border-left-color: var(--port);
 }
 
@@ -737,6 +744,11 @@ button.is-icon {
   color: var(--ink-soft);
 }
 
+/* The path itself takes the card line's size rather than shrinking again. */
+.card-output code.path {
+  font-size: inherit;
+}
+
 .card-error {
   margin: 0;
   padding: 0 1rem 0.6rem 2.6rem;
@@ -780,11 +792,24 @@ button.is-icon {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem;
+  max-width: 34rem;
 }
 
-/* Shown on narrow screens only, where field help is collapsed. */
-.help-toggle,
+/* Shown on narrow screens only. */
 .toolbar-more-toggle {
+  display: none;
+}
+
+/* Under each field one line says what it is for; More shows the full help
+   in its place. */
+.help-toggle {
+  min-height: 2rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.field:not(.help-open) > .field-help,
+.field.help-open > .field-summary {
   display: none;
 }
 
@@ -797,6 +822,7 @@ button.is-icon {
   font-size: 0.92rem;
 }
 
+.field-summary,
 .field-help,
 .field-hint,
 .field-preview {
@@ -991,8 +1017,9 @@ input[type="checkbox"] {
 
 .adder-choices {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  max-width: 44rem;
   margin-top: 0.6rem;
 }
 
@@ -1002,7 +1029,8 @@ input[type="checkbox"] {
 
 .adder-choice {
   display: grid;
-  gap: 0.25rem;
+  align-content: start;
+  gap: 0.2rem;
   text-align: left;
   padding: 0.7rem 0.85rem;
   background: var(--sheet);
@@ -1064,16 +1092,9 @@ input[type="checkbox"] {
     padding-top: 1.25rem;
   }
 
-  /* Field help is collapsed behind a Help button, so a card stays short. */
   .help-toggle {
-    display: inline-block;
     min-height: 2.25rem;
     padding: 0.2rem 0.6rem;
-    font-size: 0.82rem;
-  }
-
-  .field:not(.help-open) > .field-help {
-    display: none;
   }
 
   /* The bar that stays at the top keeps to one line; the rest is under More. */
@@ -1177,4 +1198,68 @@ input[type="checkbox"] {
   .cycle-input .field-hint {
     grid-row: 2;
   }
+}
+
+/* The narrowest phones: the bar at the top still keeps to one line. */
+@media (max-width: 22.5rem) {
+  .toolbar-main {
+    gap: 0.3rem;
+  }
+
+  .toolbar-main > button {
+    padding-left: 0.55rem;
+    padding-right: 0.55rem;
+  }
+}
+
+/* Help made of several paragraphs, as for an input row's parts. */
+div.field-help > p {
+  margin: 0.3rem 0 0;
+}
+
+div.field-help > p:first-child {
+  margin-top: 0;
+}
+
+/* The folded section of settings most entries leave at their defaults. */
+.advanced-settings {
+  border-top: 1px dashed var(--rule);
+  padding-top: 0.6rem;
+}
+
+.advanced-settings > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.92rem;
+  min-height: 2rem;
+  display: list-item;
+}
+
+.advanced-note {
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.advanced-settings[open] > summary {
+  margin-bottom: 0.9rem;
+}
+
+.advanced-settings > .field + .field {
+  margin-top: 0.9rem;
+}
+
+/* The Edit link beside an entry's reset button on the status page, for a
+   login that may edit. */
+.entry-edit {
+  display: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--shoal);
+}
+
+.can-edit .entry-edit {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.1rem;
+  padding: 0 0.35rem;
 }

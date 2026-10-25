@@ -139,7 +139,7 @@ test('an entry switched off says that null was sent on its path', () => {
   assert.deepEqual(h.tick(2), [['out.f', null]])
   const status = h.status('f', 2)
   assert.equal(status.state, 'disabled')
-  assert.equal(status.message, 'Switched off in the editor. Null was sent on out.f, so that readers do not see the last result.')
+  assert.equal(status.message, 'Nothing is calculated or published. Null was sent on out.f, so that readers do not see the last result.')
 })
 
 test('a saved total that is not published at start sends no null', () => {

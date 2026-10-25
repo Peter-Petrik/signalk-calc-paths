@@ -27,7 +27,7 @@ const { Engine, toNumber } = require('./lib/engine')
 const { lookBack } = require('./lib/history')
 const { checkName, compileFormula } = require('./lib/formula')
 const openApi = require('./lib/openapi')
-const { entryFields, entryOrder, schemaFor, uiSchema } = require('./lib/schema')
+const { entryAdvanced, entryFields, entryOrder, schemaFor, uiSchema } = require('./lib/schema')
 const { loadState, saveState } = require('./lib/state')
 const store = require('./lib/store')
 const { ZoneTracker } = require('./lib/timezone')
@@ -1098,7 +1098,7 @@ module.exports = function (app) {
   plugin.registerWithRouter = function (router) {
     // The routes stay registered while the plugin is switched off, and the
     // page may still be open; each says so instead of acting.
-    const notRunning = (res) => res.status(503).json({ error: 'The plugin is not running. Enable it on its configuration page.' })
+    const notRunning = (res) => res.status(503).json({ error: 'The plugin is not running. On its configuration page, turn on Enabled where it is shown and click Save Configuration.' })
 
     const listEntries = (req, res) => {
       if (running && !engine && blocked) {
@@ -1190,7 +1190,8 @@ module.exports = function (app) {
         revision: blocked ? null : revisionOf(document),
         blocked: blocked || null,
         fields: entryFields,
-        order: entryOrder
+        order: entryOrder,
+        advanced: entryAdvanced
       })
     }
 

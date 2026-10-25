@@ -158,9 +158,9 @@ test('loops between entries are refused, and entries outside the loop still run'
       { inputs: [{ name: 'x', path: 'ok.out' }], expression: 'x', output: 'ok.out2' }
     ]
   })
-  assert.match(entries[0].error, /circular reference/)
-  assert.match(entries[1].error, /circular reference/)
-  assert.match(entries[2].error, /circular reference: self\.a -> self\.a/)
+  assert.match(entries[0].error, /in a loop, so none of them can be worked out: loop\.(a|b) -> loop\.(a|b) -> loop\.(a|b)/)
+  assert.match(entries[1].error, /in a loop/)
+  assert.equal(entries[2].error, 'it reads its own output path self.a; an entry cannot read what it publishes')
   assert.equal(entries[3].error, null)
   assert.equal(entries[4].error, null)
 })
@@ -261,7 +261,8 @@ test('an entry may not follow its own output, or a loop, for resets', () => {
       { input: 'b.today', output: 'c.today' }
     ]
   })
-  for (const entry of entries) assert.match(entry.error, /circular reference/)
+  assert.match(entries[0].error, /reads its own output path a\.today/)
+  for (const entry of entries.slice(1)) assert.match(entry.error, /in a loop/)
 })
 
 test('every choice in the time zone list is a zone the plugin accepts', () => {
@@ -349,4 +350,20 @@ test('every fault of an entry is listed with its field, the first one stopping i
   // The expression is not checked against short names that cannot be used.
   assert.deepEqual(formula.faults.map((f) => f.field), ['inputs.0.name', 'inputs.1.path'])
   assert.equal(formula.error, formula.faults[0].text)
+})
+
+test('every field of the editor has a one-line summary, and the advanced fields close each order', () => {
+  const { entryAdvanced } = require('../lib/schema')
+  for (const type of ['formula', 'counter', 'integration', 'cycles', 'record']) {
+    for (const [field, property] of Object.entries(entryFields[type].properties)) {
+      if (!property.description) continue
+      assert.ok(property.summary, `${type}.${field} has no summary`)
+      assert.ok(property.summary.length <= 100, `${type}.${field}: the summary is ${property.summary.length} characters`)
+      assert.ok(!property.summary.includes('\n'), `${type}.${field}: one line`)
+    }
+    const listed = entryOrder[type].filter((field) => field !== '*')
+    const advanced = entryAdvanced[type]
+    assert.deepEqual(listed.slice(listed.length - advanced.length).sort(), [...advanced].sort(), `${type}: the advanced fields come last`)
+  }
+  assert.equal(entryFields.formula.properties.enabled.title, 'Enabled')
 })

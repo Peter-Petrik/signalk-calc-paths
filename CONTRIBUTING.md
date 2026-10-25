@@ -34,7 +34,7 @@ The plugin is plain JavaScript with no build step and one runtime dependency, `e
 | `lib/config.js` | Checking of the entries and settings before they run. |
 | `lib/store.js` | Reading, checking and writing `entries.json`, and taking over the lists kept in the plugin settings before 0.3.0. |
 | `lib/state.js` | Reading and writing the state file. |
-| `lib/schema.js` | The plugin settings form and the field definitions the editor builds its forms from. |
+| `lib/schema.js` | The plugin settings form and the field definitions the editor builds its forms from: titles, full help, the one-line summaries, the order of the fields and those folded under Advanced settings. |
 | `lib/openapi.js` | The description of the HTTP routes shown in the server's OpenAPI browser. |
 | `public/` | The page under Webapps: the status page and the entry editor. |
 | `docs/` | Pages the README links to: upgrading from earlier versions, and time zone changes worked through. |
@@ -80,7 +80,7 @@ Every push runs Signal K's plugin CI workflow, which installs the plugin into a 
 1. One logical change per pull request.
 2. Include a clear description of what the change does and why. The maintainer writes the `CHANGELOG.md` entry when the change is released.
 3. Run `npm test` before submitting. For a change to `index.js` or `public/`, also try it against a running Signal K server and say so in the description.
-4. A change to how a total is calculated, reset or restored must be reflected in the "How the Calculations Behave" and "Limitations and Assumptions" sections of the README. A new or moved field of an entry is listed in the README's table for its type, in the order the editor shows it (`entryOrder` in `lib/schema.js`).
+4. A change to how a total is calculated, reset or restored must be reflected in the "How the Calculations Behave" and "Limitations and Assumptions" sections of the README. A new or moved field of an entry is listed in the README's table for its type, in the order the editor shows it (`entryOrder` in `lib/schema.js`). A new field also needs a one-line summary (`SUMMARIES`), and a field most entries leave at its default goes under Advanced settings (`entryAdvanced`), where the README's table marks it as advanced.
 
 ## Code Style
 

@@ -83,3 +83,23 @@ test('short names are validated', () => {
     assert.match(checkName(name), /built-in/, name)
   }
 })
+
+test('a parse error is explained in words a user can act on', () => {
+  const message = (expression) => { try { compileFormula(expression, ['a', 'b']) } catch (err) { return err.message } return null }
+  assert.equal(message('a *'), 'the expression does not parse: it ends too soon, after an operator, a comma or an opening bracket')
+  assert.equal(message('a +* 2'), 'the expression does not parse: "*" is out of place; an operator needs a value on each side')
+  assert.equal(message('a / (b'), 'the expression does not parse: a closing bracket is missing at the end')
+  assert.equal(message('max(a, b'), 'the expression does not parse: a closing bracket is missing at the end')
+  assert.equal(message('(a b)'), 'the expression does not parse: "b" at character 4 is out of place; a closing bracket, or an operator before it, is missing')
+  assert.equal(message('(a, b) * 2'), 'the expression does not parse: the comma at character 3 is not inside a function\'s brackets; a comma separates the values of a function, as in max(a, b)')
+  assert.equal(message('(a * b))'), 'the expression does not parse: the ")" at character 8 has no opening bracket')
+  assert.equal(message('sqrt()'), 'the expression does not parse: a ")" comes where a value belongs: the brackets hold nothing, or a value is missing before it')
+  assert.equal(message('max(,a)'), 'the expression does not parse: a "," comes where a value belongs: a value is missing before it')
+  assert.equal(message('a ? b'), 'the expression does not parse: "?" needs ":" and a second value, as in condition ? a : b')
+  assert.equal(message('a b'), 'the expression does not parse: "b" at character 3 is left over; two values need an operator between them')
+  assert.equal(message('a = 2'), 'the expression does not parse: "=" cannot be used at character 3; compare with ==, !=, >= or <=')
+  assert.equal(message('a & b'), 'the expression does not parse: "&" cannot be used at character 3; write and')
+  assert.equal(message('a.b'), 'the expression does not parse: a path cannot be written in the expression; add it as an input and use its short name')
+  // No message shows the library's token names.
+  for (const bad of ['a *', 'a +* 2', '* a', 'max(a,', 'a ? b :', '(a', 'a)', '[a]', 'a$', ')', 'sqrt()', 'max(,a)', 'max(a,)']) assert.doesNotMatch(message(bad), /TEOF|TOP|TPAREN|TCOMMA|EOF|parse error \[/)
+})

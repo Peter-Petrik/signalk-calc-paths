@@ -76,7 +76,7 @@
     waiting: 'Waiting',
     stale: 'Stale',
     error: 'Configuration error',
-    disabled: 'Switched off'
+    disabled: 'Disabled'
   }
 
   // When a total resets, or a record starts again, for the value of a fact.
@@ -111,6 +111,25 @@
       return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(instant)
     } catch (err) {
       return new Intl.DateTimeFormat(undefined, options).format(instant)
+    }
+  }
+
+  /**
+   * A time of day as the rest of the page gives it, on the 24-hour clock in
+   * the plugin's time zone, with seconds when asked: 09:41:41.
+   */
+  function clock (date, seconds) {
+    const options = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+    if (seconds) options.second = '2-digit'
+    const fixed = /^([+-])(\d{2}):(\d{2})$/.exec(timeZone || '')
+    try {
+      if (fixed) {
+        const minutes = (Number(fixed[2]) * 60 + Number(fixed[3])) * (fixed[1] === '-' ? -1 : 1)
+        return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' }).format(new Date(date.getTime() + minutes * 60000))
+      }
+      return new Intl.DateTimeFormat(undefined, { ...options, timeZone }).format(date)
+    } catch (err) {
+      return new Intl.DateTimeFormat(undefined, options).format(date)
     }
   }
 
@@ -197,7 +216,7 @@
       default:
         return null
     }
-    const label = isRecord ? 'Last started again' : entry.type === 'cycles' ? 'Cycles forgotten' : 'Last reset'
+    const label = 'Last reset'
     return fact(label, `${when(record.at)}: ${why}`)
   }
 
@@ -299,7 +318,7 @@
     else restart = RESET_PHRASES[entry.resets] || RESET_PHRASES.manual
     return [
       fact(entry.keep === 'highest' ? 'Highest of' : 'Lowest of', input),
-      fact('Starts again', restart),
+      fact('Resets', restart),
       fact('Reached', entry.record ? when(entry.record.at) : 'no value seen yet'),
       entry.windowStart ? fact('Covers', `since ${when(entry.windowStart)}`) : null,
       time,
@@ -326,11 +345,15 @@
       case 'skipped':
         return fact(label, `not filled in: ${h.reason}`)
       case 'empty':
-        return fact(label, h.reason ? `not filled in: ${h.reason}` : `nothing held up to ${when(h.to)}`)
+        if (h.reason) return fact(label, `not filled in: ${h.reason}`)
+        // A time since that found the input but never at the level read
+        // something, so "holds nothing" would mislead.
+        if (entry.type === 'record' && (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow')) return fact(label, `not at the level in the history read, up to ${when(h.to)}`)
+        return fact(label, `the history holds no values on ${entry.inputs.length === 1 ? entry.inputs[0] : 'the inputs'} up to ${when(h.to)}`)
       case 'filled': {
         const span = h.from ? `${when(h.from)} to ${when(h.to)}` : `up to ${when(h.to)}`
         const steps = Number.isFinite(h.resolution) && h.resolution > 1 ? `, in steps of ${duration(h.resolution)}` : ''
-        if (entry.type === 'cycles') return fact(label, `${h.stretches} ${h.stretches === 1 ? 'stretch' : 'stretches'}, ${span}${steps}`)
+        if (entry.type === 'cycles') return fact(label, `${h.stretches} ON and OFF ${h.stretches === 1 ? 'stretch' : 'stretches'}, ${span}${steps}`)
         if (entry.type === 'record') {
           if (entry.keep === 'sinceAbove' || entry.keep === 'sinceBelow') return fact(label, `last at the level ${when(h.found)}`)
           return fact(label, `${span}; the ${entry.keep === 'highest' ? 'highest' : 'lowest'} there was reached ${when(h.found)}`)
@@ -349,7 +372,10 @@
   function factsOf (entry) {
     let facts
     if (entry.type === 'formula') {
-      facts = [fact('Formula', entry.expression), substitutedFact(entry)]
+      // What each short name in the expression stands for.
+      const names = entry.inputNames || []
+      const inputs = names.length === entry.inputs.length && names.length > 0 ? fact('Inputs', names.map((name, i) => `${name} = ${entry.inputs[i]}`).join(', ')) : null
+      facts = [fact('Formula', entry.expression), inputs, substitutedFact(entry)]
     } else if (entry.type === 'cycles') {
       facts = [...cyclesFacts(entry), resetFact(entry.lastReset, entry)]
     } else if (entry.type === 'record') {
@@ -374,6 +400,9 @@
     const what = element('div', 'entry-what')
     const name = element('h3', 'entry-name')
     const path = element('p', 'entry-path')
+    // Opens the entry in the editor; shown only to a login that may edit.
+    const edit = element('a', 'entry-edit', 'Edit')
+    edit.href = `#edit=${encodeURIComponent(entry.key)}`
     what.append(name, path)
 
     const reading = element('div', 'entry-reading')
@@ -392,10 +421,10 @@
     // while the buttons beside it are rebuilt.
     const outcome = element('span', 'action-result')
     outcome.setAttribute('role', 'status')
-    action.append(outcome)
+    action.append(outcome, edit)
     item.append(what, reading, detail, action)
 
-    const row = { item, name, path, reading, state, message, facts, factsDrawn: null, action, outcome, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
+    const row = { item, name, path, edit, reading, state, message, facts, factsDrawn: null, action, outcome, confirmTimer: null, resultTimer: null, stage: 'idle', result: null, drawn: null }
     rows.set(entry.key, row)
     return row
   }
@@ -426,7 +455,7 @@
     row.drawn = drawn
 
     for (const child of [...row.action.children]) {
-      if (child !== row.outcome) child.remove()
+      if (child !== row.outcome && child !== row.edit) child.remove()
     }
     const result = row.stage === 'confirm' || !row.result ? null : row.result
     row.outcome.textContent = result ? result.text : ''
@@ -434,7 +463,7 @@
     if (!entry.canReset) return
 
     if (row.stage === 'confirm') {
-      const confirm = element('button', 'is-confirm', { cycles: 'Confirm: forget', record: 'Confirm: start again' }[entry.type] || 'Confirm reset')
+      const confirm = element('button', 'is-confirm', 'Confirm reset')
       confirm.type = 'button'
       confirm.addEventListener('click', () => reset(row, entry))
       const cancel = element('button', 'is-quiet', 'Cancel')
@@ -448,13 +477,13 @@
           setStage(row, entry, 'idle')
         })
       }
-      row.action.append(confirm, cancel)
+      row.edit.before(confirm, cancel)
       return
     }
 
     const words = {
-      cycles: ['Forget cycles', `Forget the cycles counted for ${label}`],
-      record: ['Start again', `Start the record of ${label} again from the present value`]
+      cycles: ['Reset cycles', `Reset the cycles counted for ${label}`],
+      record: ['Reset record', `Reset the record of ${label} to the present value`]
     }[entry.type] || ['Reset to zero', `Reset ${label} to zero`]
     const button = element('button', '', words[0])
     button.type = 'button'
@@ -465,7 +494,7 @@
     button.addEventListener('click', () => {
       if (row.stage !== 'busy') setStage(row, entry, 'confirm')
     })
-    row.action.append(button)
+    row.edit.before(button)
   }
 
   function setStage (row, entry, stage) {
@@ -507,7 +536,7 @@
         body: '{}'
       })
       if (response.ok) {
-        showResult(row, entry, { cycles: 'Cycles forgotten', record: 'Started again' }[entry.type] || 'Reset to zero', false)
+        showResult(row, entry, { cycles: 'Cycles reset', record: 'Record reset' }[entry.type] || 'Reset to zero', false)
       } else if (response.status === 401 || response.status === 403) {
         showResult(row, entry, 'Not reset: this login may not change data', true)
       } else {
@@ -546,13 +575,20 @@
     const row = rows.get(entry.key) || createRow(entry)
     row.item.className = `entry is-${entry.state}`
     row.name.textContent = entry.name || entry.output || 'Unnamed entry'
+    row.edit.setAttribute('aria-label', `Edit ${row.name.textContent}`)
     // Outside a group an entry sits straight under the page heading.
     row.name.setAttribute('aria-level', entry.group ? '3' : '2')
     writeWithPaths(row.path, entry.output || '', [entry.output])
     renderReading(row, entry)
     row.state.textContent = STATE_LABELS[entry.state] || entry.state
     const paths = pathsOf(entry)
-    writeWithPaths(row.message, entry.message ? `. ${entry.message}` : '', paths)
+    // A fault from the configuration reads as a clause ("the expression
+    // does not parse"); after the state's label it starts a sentence.
+    // A message that starts with a path keeps the path as it is written:
+    // paths are case-sensitive.
+    const text = entry.message || ''
+    const message = text && !paths.some((path) => path && text.startsWith(path)) ? text.charAt(0).toUpperCase() + text.slice(1) : text
+    writeWithPaths(row.message, message ? `. ${message}` : '', paths)
     renderFacts(row, factsOf(entry), paths)
     // The action area is left alone while a reset is being confirmed or
     // sent, so a refresh cannot pull the button out from under a click.
@@ -741,12 +777,12 @@
     updateAllToggle()
 
     if (list.length === 0) {
-      showPlaceholder('No entries yet. Add a formula, a period counter, an integration or a cycles entry in the editor.', { text: 'Open the editor', href: '#edit' })
+      showPlaceholder('No entries yet. An entry is a formula, a period counter, an integration, a cycles entry or a record, added in the editor.', { text: 'Open the editor', href: '#edit' })
     } else {
       placeholder.hidden = true
     }
     const started = data.startedAt ? `. Plugin running since ${when(data.startedAt)}` : ''
-    refreshed.textContent = `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(answeredAt)}${started}`
+    refreshed.textContent = `Updated ${clock(answeredAt, true)}${started}`
   }
 
   /**
@@ -763,11 +799,26 @@
     if (text) offline.append(notice('warning', text))
   }
 
-  /** The time of the last answer, with the date when it was not today. */
+  /**
+   * The time of the last answer, with the date when it was not today. Today
+   * is the day in the plugin's time zone, in which the time is given, not
+   * the browser's.
+   */
   function answeredWhen () {
-    const today = new Date().toDateString() === answeredAt.toDateString()
-    const options = today ? { timeStyle: 'short' } : { dateStyle: 'medium', timeStyle: 'short' }
-    return new Intl.DateTimeFormat(undefined, options).format(answeredAt)
+    const day = (date) => {
+      const options = { year: 'numeric', month: '2-digit', day: '2-digit' }
+      const fixed = /^([+-])(\d{2}):(\d{2})$/.exec(timeZone || '')
+      try {
+        if (fixed) {
+          const minutes = (Number(fixed[2]) * 60 + Number(fixed[3])) * (fixed[1] === '-' ? -1 : 1)
+          return new Intl.DateTimeFormat('en-CA', { ...options, timeZone: 'UTC' }).format(new Date(date.getTime() + minutes * 60000))
+        }
+        return new Intl.DateTimeFormat('en-CA', { ...options, timeZone }).format(date)
+      } catch (err) {
+        return date.toDateString()
+      }
+    }
+    return day(new Date()) === day(answeredAt) ? clock(answeredAt, false) : when(answeredAt.toISOString())
   }
 
   /**
@@ -846,7 +897,7 @@
     } else if (notRunning && result.body.blocked) {
       showPlaceholder(`${result.body.error}. No entries are running. The file has been left as it is.`, { text: 'Open the editor to save a new set', href: '#edit' })
     } else if (notRunning) {
-      showPlaceholder('The plugin is not running. Enable it in the plugin configuration.', { text: 'Open the configuration', href: SETTINGS_URL })
+      showPlaceholder('The plugin is not running. On its configuration page, turn on Enabled where it is shown and click Save Configuration.', { text: 'Open the configuration', href: SETTINGS_URL })
     } else {
       showPlaceholder(`The server answered ${result.status}. Trying again.`)
     }

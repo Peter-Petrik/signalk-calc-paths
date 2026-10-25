@@ -54,8 +54,7 @@
     ]
   },
   "dependencies": {
-    "expr-eval-fork": "^3.0.3",
-    "signalk-server": "^2.35.1"
+    "expr-eval-fork": "^3.0.3"
   },
   "files": [
     "index.js",
